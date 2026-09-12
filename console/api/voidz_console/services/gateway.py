@@ -216,7 +216,6 @@ body.fa .fa{{display:inline}}
 @keyframes pulse{{0%{{box-shadow:0 0 0 0 rgba(78,203,149,.55)}}70%{{box-shadow:0 0 0 9px rgba(78,203,149,0)}}100%{{box-shadow:0 0 0 0 rgba(78,203,149,0)}}}}
 @keyframes pop{{0%{{transform:scale(.7);opacity:0}}100%{{transform:scale(1);opacity:1}}}}
 </style></head><body>
-<button id="lang" onclick="document.body.classList.toggle('fa');this.textContent=document.body.classList.contains('fa')?'EN':'فارسی'">فارسی</button>
 <div class="w">
 <div class="top"><img class="moon" src="data:image/png;base64,{_LOGO_B64}" alt="Voidz">
 <div><h1>Voidz</h1><div class="sub2">{esc(title)}</div></div></div>
@@ -238,14 +237,6 @@ body.fa .fa{{display:inline}}
 <div style="color:#5d6678;font-size:10.5px;text-align:center">Scan the subscription with your client</div>
 </div>
 <div class="card"><h3 class="en">Individual configs</h3><h3 class="fa" hidden>کانفیگ‌های جداگانه</h3>{cards}</div>
-<div class="card"><h3 class="en">Need a client app?</h3><h3 class="fa" hidden>کلاینت موردنیاز</h3>
-<div class="apps">
-<a href="https://github.com/MatsuriDayo/v2rayNG/releases" target="_blank" rel="noopener">v2rayNG</a>
-<a href="https://github.com/MatsuriDayo/nekoray/releases" target="_blank" rel="noopener">NekoBox</a>
-<a href="https://apps.apple.com/app/streisand/id6490569503" target="_blank" rel="noopener">Streisand</a>
-<a href="https://github.com/Happ-proxy/happ-desktop/releases" target="_blank" rel="noopener">Happ</a>
-<a href="https://github.com/SagerNet/sing-box/releases" target="_blank" rel="noopener">sing-box</a>
-</div></div>
 <p class="ft">Powered by Voidz</p>
 </div>
 <script>
