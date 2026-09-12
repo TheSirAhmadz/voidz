@@ -84,11 +84,11 @@ async def create_customer(pool, plan, name: str, limit_gb: float, days: int | No
         ss_cipher = "chacha20-ietf-poly1305"
         ss_password = secrets.token_urlsafe(16)
     limit_bytes = int(float(limit_gb) * (1024 ** 3)) if limit_gb else 0
-    expires_at = (_utcnow() + timedelta(days=int(days))) if days else None
+    now = _utcnow()
+    expires_at = (now + timedelta(days=int(days))) if days else None
     max_devices = max(0, int(max_devices or 0))
     cid = secrets.token_hex(16)
     sub_token = secrets.token_urlsafe(24)
-    now = _utcnow()
     await pool.execute(
         "INSERT INTO customers (id, plan_id, name, sub_token, cred_uuid, ss_cipher, ss_password, "
         "limit_bytes, used_bytes_cached, expires_at, active, note, created_at, max_devices) "
