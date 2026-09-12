@@ -541,6 +541,12 @@ async def plan_subscription(sub_token: str, request: Request):
     if not host:
         return _page("Missing host", "Append ?host=<your-domain> to this URL.", status=400)
 
+    from ..services.quota import _link_uuid
+
+    plan_protocols_str = await pool.fetchval("SELECT protocols FROM plans WHERE id = $1", cust["plan_id"])
+    plan_protocols = [p for p in (plan_protocols_str or "").split(",") if p]
+    wanted_uuids = [_link_uuid(cust["cred_uuid"], proto) for proto in plan_protocols]
+
     configs = []
     for pi in pi_rows:
         if pi["status"] != "running" or not pi["endpoint_token"]:
@@ -551,7 +557,7 @@ async def plan_subscription(sub_token: str, request: Request):
                 worker_url, "POST",
                 f"/worker/api/instances/{pi['instance_id']}/proxy/core/api/share",
                 {"host": host, "path_prefix": f"/i/{pi['endpoint_token']}",
-                 "uuids": [cust["cred_uuid"]]},
+                 "uuids": wanted_uuids},
             )
         except worker_svc.WorkerError:
             continue

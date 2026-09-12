@@ -54,6 +54,19 @@ async def _plan_instances(pool, plan_id: str):
     )
 
 
+async def _plan_protocols(pool, plan_id: str) -> list[str]:
+    protocols = await pool.fetchval("SELECT protocols FROM plans WHERE id = $1", plan_id)
+    return [p for p in (protocols or "").split(",") if p]
+
+
+def _link_uuid(cred_uuid: str, protocol: str) -> str:
+    """Core's link store is keyed by uuid alone, so a multi-protocol customer
+    needs one distinct uuid per protocol — derived deterministically from the
+    customer's cred_uuid so every region/function can recompute it without
+    extra storage."""
+    return str(uuid_mod.uuid5(uuid_mod.NAMESPACE_URL, f"voidz-link:{cred_uuid}:{protocol}"))
+
+
 async def create_customer(pool, plan, name: str, limit_gb: float, days: int | None,
                           note: str = "") -> dict:
     """Provision a new customer across every instance in the plan and
@@ -95,7 +108,7 @@ async def provision_customer_links(pool, plan, customer: dict) -> None:
             continue
         for proto in protocols:
             body = {
-                "uuid": customer["cred_uuid"],
+                "uuid": _link_uuid(customer["cred_uuid"], proto),
                 "protocol": proto,
                 "label": f"{customer['name']} · {pi['region_label'] or 'region'}",
                 "active": bool(customer.get("active", True)),
@@ -117,51 +130,59 @@ async def provision_customer_links(pool, plan, customer: dict) -> None:
 
 
 async def set_customer_active(pool, plan_id: str, cred_uuid: str, active: bool) -> None:
+    protocols = await _plan_protocols(pool, plan_id)
     for pi in await _plan_instances(pool, plan_id):
         worker_url = await _instance_worker(pool, pi["instance_id"])
         if not worker_url:
             continue
-        try:
-            await worker_svc.worker_call(
-                worker_url, "PATCH",
-                f"/worker/api/instances/{pi['instance_id']}/proxy/core/api/links/{cred_uuid}",
-                {"active": active},
-            )
-        except worker_svc.WorkerError as exc:
-            log.warning("set_active(%s) failed on %s: %s", active, pi["instance_id"], exc)
+        for proto in protocols:
+            try:
+                await worker_svc.worker_call(
+                    worker_url, "PATCH",
+                    f"/worker/api/instances/{pi['instance_id']}/proxy/core/api/links/{_link_uuid(cred_uuid, proto)}",
+                    {"active": active},
+                )
+            except worker_svc.WorkerError as exc:
+                log.warning("set_active(%s) failed on %s/%s: %s", active, pi["instance_id"], proto, exc)
 
 
 async def patch_customer_links(pool, plan_id: str, cred_uuid: str, patch: dict) -> None:
     """Apply an arbitrary patch (expires_at, reset_usage, ...) to every region."""
+    protocols = await _plan_protocols(pool, plan_id)
     for pi in await _plan_instances(pool, plan_id):
         worker_url = await _instance_worker(pool, pi["instance_id"])
         if not worker_url:
             continue
-        try:
-            await worker_svc.worker_call(
-                worker_url, "PATCH",
-                f"/worker/api/instances/{pi['instance_id']}/proxy/core/api/links/{cred_uuid}",
-                patch,
-            )
-        except worker_svc.WorkerError as exc:
-            log.warning("patch failed on %s: %s", pi["instance_id"], exc)
+        for proto in protocols:
+            try:
+                await worker_svc.worker_call(
+                    worker_url, "PATCH",
+                    f"/worker/api/instances/{pi['instance_id']}/proxy/core/api/links/{_link_uuid(cred_uuid, proto)}",
+                    patch,
+                )
+            except worker_svc.WorkerError as exc:
+                log.warning("patch failed on %s/%s: %s", pi["instance_id"], proto, exc)
 
 
 async def delete_customer_links(pool, plan_id: str, cred_uuid: str) -> None:
+    protocols = await _plan_protocols(pool, plan_id)
     for pi in await _plan_instances(pool, plan_id):
         worker_url = await _instance_worker(pool, pi["instance_id"])
         if not worker_url:
             continue
-        try:
-            await worker_svc.worker_call(
-                worker_url, "DELETE",
-                f"/worker/api/instances/{pi['instance_id']}/proxy/core/api/links/{cred_uuid}",
-            )
-        except worker_svc.WorkerError as exc:
-            log.warning("delete link failed on %s: %s", pi["instance_id"], exc)
+        for proto in protocols:
+            try:
+                await worker_svc.worker_call(
+                    worker_url, "DELETE",
+                    f"/worker/api/instances/{pi['instance_id']}/proxy/core/api/links/{_link_uuid(cred_uuid, proto)}",
+                )
+            except worker_svc.WorkerError as exc:
+                log.warning("delete link failed on %s/%s: %s", pi["instance_id"], proto, exc)
 
 
 async def _sum_usage(pool, plan_id: str, cred_uuid: str) -> int:
+    protocols = await _plan_protocols(pool, plan_id)
+    wanted = {_link_uuid(cred_uuid, proto) for proto in protocols}
     total = 0
     for pi in await _plan_instances(pool, plan_id):
         worker_url = await _instance_worker(pool, pi["instance_id"])
@@ -175,7 +196,7 @@ async def _sum_usage(pool, plan_id: str, cred_uuid: str) -> int:
         except worker_svc.WorkerError:
             continue
         for link in data.get("links", []):
-            if link.get("uuid") == cred_uuid:
+            if link.get("uuid") in wanted:
                 total += int(link.get("used_bytes") or 0)
     return total
 
