@@ -44,7 +44,7 @@ class Link:
     __slots__ = (
         "uuid", "label", "protocol", "active", "limit_bytes", "used_bytes",
         "created_at", "expires_at", "note", "alpn", "fingerprint",
-        "ss_cipher", "ss_password", "max_devices",
+        "ss_cipher", "ss_password", "max_devices", "allowed_ips",
     )
 
     def __init__(self, uuid: str, label: str, protocol: str, *, active: bool = True,
@@ -52,7 +52,7 @@ class Link:
                  expires_at: str | None = None, note: str = "",
                  alpn: str = "h2,http/1.1", fingerprint: str = "chrome",
                  ss_cipher: str | None = None, ss_password: str | None = None,
-                 max_devices: int = 0):
+                 max_devices: int = 0, allowed_ips: list[str] | None = None):
         self.uuid = uuid
         self.label = label[:80]
         self.protocol = protocol
@@ -65,6 +65,11 @@ class Link:
         # 0 = unlimited concurrent devices; N = at most N distinct client IPs
         # may hold an open connection on this link at once.
         self.max_devices = int(max_devices or 0)
+        # Cross-region device lock, pushed by the console: when non-empty,
+        # only these IPs may use this link at all (overrides the local
+        # max_devices count, since only the console can see every region at
+        # once). Empty = no cross-region restriction yet.
+        self.allowed_ips: list[str] = list(allowed_ips) if allowed_ips else []
         # WebSocket transports need HTTP/1.1: an "h2" ALPN token lets the TLS
         # edge negotiate HTTP/2, where classic WS upgrades fail (RFC 8441 is
         # not spoken by common clients). Strip h2 wherever it appears.
@@ -105,6 +110,7 @@ class Link:
             "fingerprint": self.fingerprint,
             "expired": self.is_expired(),
             "max_devices": self.max_devices,
+            "allowed_ips": self.allowed_ips,
         }
         if include_secret:
             data["ss_cipher"] = self.ss_cipher
@@ -199,11 +205,19 @@ class ConnectionTracker:
     def active_ips_for(self, uuid: str) -> set[str]:
         return {c["ip"] for c in self._conns.values() if c["uuid"] == uuid}
 
-    def device_slot_available(self, uuid: str, ip: str, max_devices: int) -> bool:
-        """True if `ip` may open another connection on `uuid`: unlimited when
+    def device_slot_available(self, uuid: str, ip: str, max_devices: int,
+                               allowed_ips: list[str] | None = None) -> bool:
+        """True if `ip` may open another connection on `uuid`.
+
+        When `allowed_ips` is non-empty, it is a cross-region lock pushed by
+        the console (the only party that can see every region at once) and
+        takes priority: only those IPs may use the link, full stop. Otherwise
+        fall back to this single region's own view: unlimited when
         max_devices is 0, otherwise allowed if `ip` already holds a slot or a
         free slot remains. IP is a practical stand-in for "device" — the same
         mechanism used by other proxy panels for a single-device cap."""
+        if allowed_ips:
+            return ip in allowed_ips
         if max_devices <= 0:
             return True
         ips = self.active_ips_for(uuid)

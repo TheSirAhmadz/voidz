@@ -244,6 +244,7 @@ class Core:
             ss_cipher=body.get("ss_cipher"),
             ss_password=body.get("ss_password"),
             max_devices=int(body.get("max_devices") or 0),
+            allowed_ips=list(body.get("allowed_ips") or []),
         )
         if link.protocol == "shadowsocks":
             link.ss_cipher = link.ss_cipher if link.ss_cipher in (
@@ -266,6 +267,8 @@ class Core:
             link.expires_at = body["expires_at"]
         if "max_devices" in body:
             link.max_devices = max(0, int(body["max_devices"] or 0))
+        if "allowed_ips" in body:
+            link.allowed_ips = list(body["allowed_ips"] or [])
 
     def _read_process_metrics(self) -> dict:
         proc = psutil.Process()

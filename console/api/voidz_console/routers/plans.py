@@ -238,7 +238,8 @@ async def update_customer(plan_id: str, customer_id: str, request: Request,
             raise HTTPException(status_code=400, detail="max_devices must be 0-50")
         await pool.execute("UPDATE customers SET max_devices = $2 WHERE id = $1", customer_id, max_devices)
         await quota_svc.patch_customer_links(pool, plan_id, cust["cred_uuid"],
-                                             {"max_devices": max_devices})
+                                             {"max_devices": max_devices, "allowed_ips": []})
+        quota_svc.forget_device_lock(customer_id)
 
     if body.get("reset_usage"):
         await pool.execute("UPDATE customers SET used_bytes_cached = 0 WHERE id = $1", customer_id)

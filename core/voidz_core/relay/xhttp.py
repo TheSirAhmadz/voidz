@@ -146,7 +146,7 @@ class XHttpEngine:
             link = self.ctx.links.get(uuid)
             if link is None or not link.is_allowed():
                 raise HTTPException(status_code=403, detail="not authorized")
-            if not self.ctx.connections.device_slot_available(uuid, ip, link.max_devices):
+            if not self.ctx.connections.device_slot_available(uuid, ip, link.max_devices, link.allowed_ips):
                 raise HTTPException(status_code=403, detail="device limit reached")
             conn_id = secrets.token_urlsafe(6)
             self.ctx.connections.register(conn_id, uuid=uuid, ip=ip, transport=f"xhttp-{mode}")
