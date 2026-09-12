@@ -199,22 +199,30 @@ def setup() -> None:
     os.environ.setdefault("VOIDZ_CORE_CWD", str(ROOT / "core"))
 
     # ---- embedded worker ---------------------------------------------------
-    worker_env = os.environ.copy()
-    worker_env["VOIDZ_WORKER_HOST"] = "127.0.0.1"
-    worker_env["VOIDZ_WORKER_PORT"] = str(worker_port)
-    worker_env["VOIDZ_CONSOLE_URL"] = f"http://127.0.0.1:{port}"  # heartbeat target
-    _worker = subprocess.Popen(
-        [sys.executable, "-m", "voidz_worker"],
-        cwd=str(ROOT / "worker"),
-        env=worker_env,
-    )
-    atexit.register(_stop_worker)
+    # Split deployments (a dedicated worker service per region, this console
+    # running standalone) set VOIDZ_EMBEDDED_WORKER=0 to skip this — the
+    # console then only ever talks to workers over the network, symmetric
+    # with every other region instead of a special "local" case.
+    if os.environ.get("VOIDZ_EMBEDDED_WORKER", "1") not in ("0", "false", "False"):
+        worker_env = os.environ.copy()
+        worker_env["VOIDZ_WORKER_HOST"] = "127.0.0.1"
+        worker_env["VOIDZ_WORKER_PORT"] = str(worker_port)
+        worker_env["VOIDZ_CONSOLE_URL"] = f"http://127.0.0.1:{port}"  # heartbeat target
+        _worker = subprocess.Popen(
+            [sys.executable, "-m", "voidz_worker"],
+            cwd=str(ROOT / "worker"),
+            env=worker_env,
+        )
+        atexit.register(_stop_worker)
 
-    def _terminate(_num, _frame):
-        _stop_worker()
-        sys.exit(0)
+        def _terminate(_num, _frame):
+            _stop_worker()
+            sys.exit(0)
 
-    signal.signal(signal.SIGTERM, _terminate)
+        signal.signal(signal.SIGTERM, _terminate)
+    else:
+        print("[voidz] embedded worker disabled (VOIDZ_EMBEDDED_WORKER=0) — "
+              "this console expects every region to be a separate worker service", file=sys.stderr)
 
     # ---- console app on sys.path -------------------------------------------
     sys.path.insert(0, str(ROOT / "console" / "api"))
