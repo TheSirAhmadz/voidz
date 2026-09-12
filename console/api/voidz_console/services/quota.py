@@ -68,7 +68,7 @@ def _link_uuid(cred_uuid: str, protocol: str) -> str:
 
 
 async def create_customer(pool, plan, name: str, limit_gb: float, days: int | None,
-                          note: str = "") -> dict:
+                          note: str = "", max_devices: int = 0) -> dict:
     """Provision a new customer across every instance in the plan and
     record it. Returns {id, sub_token, cred_uuid}."""
     protocols = [p for p in (plan["protocols"] or "").split(",") if p]
@@ -79,20 +79,22 @@ async def create_customer(pool, plan, name: str, limit_gb: float, days: int | No
         ss_password = secrets.token_urlsafe(16)
     limit_bytes = int(float(limit_gb) * (1024 ** 3)) if limit_gb else 0
     expires_at = (_utcnow() + timedelta(days=int(days))) if days else None
+    max_devices = max(0, int(max_devices or 0))
     cid = secrets.token_hex(16)
     sub_token = secrets.token_urlsafe(24)
     now = _utcnow()
     await pool.execute(
         "INSERT INTO customers (id, plan_id, name, sub_token, cred_uuid, ss_cipher, ss_password, "
-        "limit_bytes, used_bytes_cached, expires_at, active, note, created_at) "
-        "VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 0, $9, TRUE, $10, $11)",
+        "limit_bytes, used_bytes_cached, expires_at, active, note, created_at, max_devices) "
+        "VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 0, $9, TRUE, $10, $11, $12)",
         cid, plan["id"], name, sub_token, cred_uuid, ss_cipher, ss_password,
-        limit_bytes, expires_at, note, now,
+        limit_bytes, expires_at, note, now, max_devices,
     )
     await provision_customer_links(pool, plan, {
         "cred_uuid": cred_uuid, "name": name, "active": True,
         "expires_at": expires_at.isoformat() if expires_at else None,
         "ss_cipher": ss_cipher, "ss_password": ss_password,
+        "max_devices": max_devices,
     })
     return {"id": cid, "sub_token": sub_token, "cred_uuid": cred_uuid}
 
@@ -114,6 +116,7 @@ async def provision_customer_links(pool, plan, customer: dict) -> None:
                 "active": bool(customer.get("active", True)),
                 "limit_bytes": 0,
                 "expires_at": customer.get("expires_at"),
+                "max_devices": int(customer.get("max_devices") or 0),
             }
             if proto == "shadowsocks":
                 body["ss_cipher"] = customer.get("ss_cipher")

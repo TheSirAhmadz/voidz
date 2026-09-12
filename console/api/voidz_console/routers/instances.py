@@ -351,9 +351,15 @@ async def metrics(instance_id: str, request: Request,
     if node_url is None:
         return {"available": False}
     try:
-        return await worker_svc.worker_call(
-            node_url, "GET", f"/worker/api/instances/{instance_id}/metrics", timeout=10.0
+        # There is no standalone worker-level metrics route — this proxies
+        # through to the instance's own Core process, which is what actually
+        # tracks CPU/memory/connection counts.
+        data = await worker_svc.worker_call(
+            node_url, "GET", f"/worker/api/instances/{instance_id}/proxy/core/api/metrics",
+            timeout=10.0,
         )
+        data["available"] = True
+        return data
     except worker_svc.WorkerError as exc:
         return {"available": False, "error": str(exc)}
 

@@ -143,6 +143,11 @@ class XHttpEngine:
                 return sess
             if len(self.sessions) >= MAX_SESSIONS_GLOBAL or self._per_link_count(uuid) >= MAX_SESSIONS_PER_LINK:
                 raise HTTPException(status_code=429, detail="too many sessions")
+            link = self.ctx.links.get(uuid)
+            if link is None or not link.is_allowed():
+                raise HTTPException(status_code=403, detail="not authorized")
+            if not self.ctx.connections.device_slot_available(uuid, ip, link.max_devices):
+                raise HTTPException(status_code=403, detail="device limit reached")
             conn_id = secrets.token_urlsafe(6)
             self.ctx.connections.register(conn_id, uuid=uuid, ip=ip, transport=f"xhttp-{mode}")
             sess = {

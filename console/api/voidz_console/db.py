@@ -422,10 +422,24 @@ CREATE TABLE IF NOT EXISTS customers (
     active INTEGER NOT NULL DEFAULT 1,
     note TEXT NOT NULL DEFAULT '',
     created_at TEXT NOT NULL,
-    last_synced_at TEXT
+    last_synced_at TEXT,
+    max_devices INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_customers_plan ON customers(plan_id);
 """
+
+async def _sqlite_add_columns(sqlite_db: "_SqliteDatabase") -> None:
+    """CREATE TABLE IF NOT EXISTS never adds columns to an existing SQLite
+    file, so schema additions land here as idempotent ALTER TABLEs."""
+    for stmt in (
+        "ALTER TABLE customers ADD COLUMN max_devices INTEGER NOT NULL DEFAULT 0",
+    ):
+        try:
+            await sqlite_db.conn_executescript(stmt)
+        except Exception as exc:  # duplicate column -> already migrated
+            if "duplicate column" not in str(exc).lower():
+                log.warning("sqlite migration skipped (%s): %s", stmt[:60], exc)
+
 
 POSTGRES_MIGRATIONS = None  # imported lazily below to reuse the SQL list
 
@@ -441,6 +455,7 @@ async def init_pool() -> None:
         _sqlite = _SqliteDatabase(dsn)
         await _sqlite.connect()
         await _sqlite.conn_executescript(SQLITE_SCHEMA)
+        await _sqlite_add_columns(_sqlite)
         db = _sqlite
         await _seed_default_admin()
         log.info("Voidz Console database: embedded SQLite (%s)", _mask_sqlite(dsn))
@@ -466,6 +481,7 @@ async def init_pool() -> None:
         _sqlite = _SqliteDatabase(sqlite_dsn)
         await _sqlite.connect()
         await _sqlite.conn_executescript(SQLITE_SCHEMA)
+        await _sqlite_add_columns(_sqlite)
         db = _sqlite
         await _seed_default_admin()
         log.warning(

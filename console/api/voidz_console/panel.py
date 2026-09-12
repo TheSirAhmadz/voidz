@@ -663,7 +663,8 @@ function viewPlanDetail(planId){
       '<h3>New customer</h3>'+
       '<div class="row"><div class="fld" style="width:200px;margin:0"><label>Name</label><input class="inp" id="nc-name" placeholder="e.g. Sister"></div>'+
       '<div class="fld" style="width:140px;margin:0"><label>Quota (GB, 0 = unlimited)</label><input class="inp" id="nc-gb" type="number" min="0" step="0.5" value="50"></div>'+
-      '<div class="fld" style="width:140px;margin:0"><label>Duration (days, blank = never)</label><input class="inp" id="nc-days" type="number" min="1" value="30"></div></div>'+
+      '<div class="fld" style="width:140px;margin:0"><label>Duration (days, blank = never)</label><input class="inp" id="nc-days" type="number" min="1" value="30"></div>'+
+      '<div class="fld" style="width:140px;margin:0"><label>Max devices (0 = unlimited)</label><input class="inp" id="nc-devices" type="number" min="0" max="50" value="1"></div></div>'+
       '<div class="fld"><label>Note (optional)</label><input class="inp" id="nc-note" placeholder="e.g. paid via bank transfer 12/09"></div>'+
       '<button class="btn pri" id="nc-go">Create customer</button>'+
       '</div>'+
@@ -680,8 +681,9 @@ function viewPlanDetail(planId){
       var gb=parseFloat($("#nc-gb").value||"0");
       var daysRaw=$("#nc-days").value.trim();
       var days=daysRaw?parseInt(daysRaw,10):null;
+      var devices=parseInt($("#nc-devices").value||"0",10);
       $("#nc-go").disabled=true;
-      api("POST","/api/plans/"+planId+"/customers",{name:name,limit_gb:gb,days:days,note:$("#nc-note").value.trim()})
+      api("POST","/api/plans/"+planId+"/customers",{name:name,limit_gb:gb,days:days,note:$("#nc-note").value.trim(),max_devices:devices})
         .then(function(cust){
           toast("Customer created","ok");
           $("#pd-newcust").hidden=true;
@@ -716,17 +718,20 @@ function viewPlanDetail(planId){
     if(!plan.customers.length){
       host.innerHTML='<p class="ftx">No customers yet — add one above and hand them the subscription link.</p>';return;
     }
-    host.innerHTML='<table class="tbl"><thead><tr><th>Name</th><th>Usage</th><th>Expires</th><th>Status</th><th></th></tr></thead><tbody>'+
+    host.innerHTML='<table class="tbl"><thead><tr><th>Name</th><th>Usage</th><th>Expires</th><th>Devices</th><th>Status</th><th></th></tr></thead><tbody>'+
       plan.customers.map(function(c){
         var pct=c.limit_bytes?Math.min(100,100*c.used_bytes_cached/c.limit_bytes):0;
         var usage=c.limit_bytes?fmtGB(c.used_bytes_cached)+" / "+fmtGB(c.limit_bytes)+" GB":fmtGB(c.used_bytes_cached)+" GB / ∞";
         var status=!c.active?'<span class="st fail"><span class="d"></span>Disabled</span>':'<span class="st run"><span class="d"></span>Active</span>';
         return "<tr data-cid=\""+c.id+"\"><td><b>"+esc(c.name)+"</b>"+(c.note?'<div class="ftx" style="font-size:11px">'+esc(c.note)+"</div>":"")+"</td>"+
           '<td><div style="width:110px">'+usage+'<div class="meter" style="margin-top:4px"><div class="'+(pct>90?"crit":pct>70?"warn":"")+'" style="width:'+pct+'%"></div></div></div></td>'+
-          "<td>"+fmtExpiry(c.expires_at)+"</td><td>"+status+"</td>"+
+          "<td>"+fmtExpiry(c.expires_at)+"</td>"+
+          '<td>'+(c.max_devices?c.max_devices:"∞")+'</td>'+
+          "<td>"+status+"</td>"+
           '<td><div class="row" style="gap:4px;flex-wrap:nowrap">'+
           '<button class="btn sm" data-act="copy">Copy link</button>'+
           '<button class="btn sm" data-act="extend">+30d</button>'+
+          '<button class="btn sm" data-act="devices">Devices</button>'+
           '<button class="btn sm" data-act="reset">Reset</button>'+
           '<button class="btn sm" data-act="toggle">'+(c.active?"Disable":"Enable")+"</button>"+
           '<button class="btn sm dng" data-act="del">Revoke</button>'+
@@ -745,6 +750,15 @@ function viewPlanDetail(planId){
         }
         if(act==="extend"){
           api("PATCH","/api/plans/"+planId+"/customers/"+cid,{extend_days:30}).then(function(){toast("Extended 30 days","ok");load()}).catch(function(e){toast(e.message,"err")});
+          return;
+        }
+        if(act==="devices"){
+          var cur=cust.max_devices||0;
+          var raw=prompt("Max concurrent devices for "+cust.name+" (0 = unlimited):",String(cur));
+          if(raw===null)return;
+          var n=parseInt(raw,10);
+          if(isNaN(n)||n<0||n>50){toast("Enter a number 0-50","err");return}
+          api("PATCH","/api/plans/"+planId+"/customers/"+cid,{max_devices:n}).then(function(){toast("Device limit updated","ok");load()}).catch(function(e){toast(e.message,"err")});
           return;
         }
         if(act==="reset"){

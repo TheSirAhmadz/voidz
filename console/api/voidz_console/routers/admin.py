@@ -211,8 +211,10 @@ async def recent_deployments(request: Request, _=Depends(admin_user)):
 async def system_info(request: Request, _=Depends(admin_user)):
     pool = get_pool(request)
     db_ok = bool(await pool.fetchval("SELECT 1"))
+    from ..db import db as _db
+
     return {
-        "database": {"ok": db_ok, "provider": "postgresql"},
+        "database": {"ok": db_ok, "provider": getattr(_db, "mode", "postgresql")},
         "provider": {
             "railway": deploy_svc.railway_provider() is not None,
             "local_worker": settings.local_worker_url,

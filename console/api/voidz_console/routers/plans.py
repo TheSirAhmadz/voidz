@@ -178,8 +178,14 @@ async def create_customer_route(plan_id: str, request: Request,
     if days is not None and not (1 <= days <= 3650):
         raise HTTPException(status_code=400, detail="duration must be 1-3650 days")
     note = str(body.get("note") or "")[:300]
+    try:
+        max_devices = int(body.get("max_devices") or 0)
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="invalid max_devices")
+    if not (0 <= max_devices <= 50):
+        raise HTTPException(status_code=400, detail="max_devices must be 0-50")
 
-    result = await quota_svc.create_customer(pool, plan, name, limit_gb, days, note)
+    result = await quota_svc.create_customer(pool, plan, name, limit_gb, days, note, max_devices)
     await _record_activity(pool, user["id"], None, "customer",
                            f"Customer '{name}' added to plan '{plan['name']}'")
     result["sub_url"] = _sub_url(request, result["sub_token"])
@@ -222,6 +228,17 @@ async def update_customer(plan_id: str, customer_id: str, request: Request,
         except (TypeError, ValueError):
             raise HTTPException(status_code=400, detail="invalid limit_gb")
         await pool.execute("UPDATE customers SET limit_bytes = $2 WHERE id = $1", customer_id, limit_bytes)
+
+    if "max_devices" in body:
+        try:
+            max_devices = int(body["max_devices"] or 0)
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="invalid max_devices")
+        if not (0 <= max_devices <= 50):
+            raise HTTPException(status_code=400, detail="max_devices must be 0-50")
+        await pool.execute("UPDATE customers SET max_devices = $2 WHERE id = $1", customer_id, max_devices)
+        await quota_svc.patch_customer_links(pool, plan_id, cust["cred_uuid"],
+                                             {"max_devices": max_devices})
 
     if body.get("reset_usage"):
         await pool.execute("UPDATE customers SET used_bytes_cached = 0 WHERE id = $1", customer_id)

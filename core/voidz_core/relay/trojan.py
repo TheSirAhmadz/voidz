@@ -132,6 +132,11 @@ async def trojan_ws_tunnel(ctx: RelayContext, ws: WebSocket) -> None:
         return
 
     ip = ws_client_ip(ws)
+    if not ctx.connections.device_slot_available(link.uuid, ip, link.max_devices):
+        log.warning("trojan rejected uuid=%s ip=%s (device limit %d reached)",
+                   link.uuid[:8], ip, link.max_devices)
+        await ws.close(code=1008, reason="device limit reached")
+        return
     conn_id = secrets.token_urlsafe(6)
     ctx.connections.register(conn_id, uuid=link.uuid, ip=ip, transport="trojan-ws")
     log.info("trojan ws open [%s] ip=%s active=%d", conn_id, ip, ctx.connections.count())

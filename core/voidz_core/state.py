@@ -44,14 +44,15 @@ class Link:
     __slots__ = (
         "uuid", "label", "protocol", "active", "limit_bytes", "used_bytes",
         "created_at", "expires_at", "note", "alpn", "fingerprint",
-        "ss_cipher", "ss_password",
+        "ss_cipher", "ss_password", "max_devices",
     )
 
     def __init__(self, uuid: str, label: str, protocol: str, *, active: bool = True,
                  limit_bytes: int = 0, used_bytes: int = 0, created_at: str | None = None,
                  expires_at: str | None = None, note: str = "",
                  alpn: str = "h2,http/1.1", fingerprint: str = "chrome",
-                 ss_cipher: str | None = None, ss_password: str | None = None):
+                 ss_cipher: str | None = None, ss_password: str | None = None,
+                 max_devices: int = 0):
         self.uuid = uuid
         self.label = label[:80]
         self.protocol = protocol
@@ -61,6 +62,9 @@ class Link:
         self.created_at = created_at or _utcnow().isoformat()
         self.expires_at = expires_at
         self.note = note[:300]
+        # 0 = unlimited concurrent devices; N = at most N distinct client IPs
+        # may hold an open connection on this link at once.
+        self.max_devices = int(max_devices or 0)
         # WebSocket transports need HTTP/1.1: an "h2" ALPN token lets the TLS
         # edge negotiate HTTP/2, where classic WS upgrades fail (RFC 8441 is
         # not spoken by common clients). Strip h2 wherever it appears.
@@ -100,6 +104,7 @@ class Link:
             "alpn": self.alpn,
             "fingerprint": self.fingerprint,
             "expired": self.is_expired(),
+            "max_devices": self.max_devices,
         }
         if include_secret:
             data["ss_cipher"] = self.ss_cipher
@@ -190,6 +195,19 @@ class ConnectionTracker:
 
     def count(self) -> int:
         return len(self._conns)
+
+    def active_ips_for(self, uuid: str) -> set[str]:
+        return {c["ip"] for c in self._conns.values() if c["uuid"] == uuid}
+
+    def device_slot_available(self, uuid: str, ip: str, max_devices: int) -> bool:
+        """True if `ip` may open another connection on `uuid`: unlimited when
+        max_devices is 0, otherwise allowed if `ip` already holds a slot or a
+        free slot remains. IP is a practical stand-in for "device" — the same
+        mechanism used by other proxy panels for a single-device cap."""
+        if max_devices <= 0:
+            return True
+        ips = self.active_ips_for(uuid)
+        return ip in ips or len(ips) < max_devices
 
     def grouped_by_ip(self) -> list[dict]:
         grouped: dict[str, dict] = {}

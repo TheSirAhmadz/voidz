@@ -221,4 +221,10 @@ MIGRATIONS: list[tuple[str, str]] = [
         CREATE INDEX IF NOT EXISTS idx_customers_plan ON customers(plan_id);
         """,
     ),
+    (
+        "0008_customer_max_devices",
+        """
+        ALTER TABLE customers ADD COLUMN IF NOT EXISTS max_devices INT NOT NULL DEFAULT 0;
+        """,
+    ),
 ]

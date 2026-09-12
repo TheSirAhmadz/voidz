@@ -269,7 +269,14 @@ class ProcessDriver(BaseDriver):
             mem_bytes = spec.memory_mb * 1024 * 1024
             try:
                 resource.setrlimit(resource.RLIMIT_AS, (mem_bytes, mem_bytes))
-                resource.setrlimit(resource.RLIMIT_CPU, (60 * 60, 60 * 60 + 60))
+                # RLIMIT_CPU counts cumulative CPU-seconds actually consumed by
+                # the process, not wall-clock uptime — a long-lived relay
+                # handling real traffic will burn through a small cap over
+                # days/weeks and get SIGKILL'd. This is a runaway-loop safety
+                # net, not a throughput limit, so it's set generously (30 days
+                # of CPU time) rather than the ~1-hour cap this used to be.
+                cpu_seconds = 30 * 24 * 60 * 60
+                resource.setrlimit(resource.RLIMIT_CPU, (cpu_seconds, cpu_seconds + 60))
                 resource.setrlimit(resource.RLIMIT_FSIZE, (512 * 1024 * 1024, 512 * 1024 * 1024))
                 try:
                     resource.setrlimit(resource.RLIMIT_NPROC, (spec.max_processes, spec.max_processes))

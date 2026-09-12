@@ -242,6 +242,7 @@ class Core:
             fingerprint=str(body.get("fingerprint") or "chrome"),
             ss_cipher=body.get("ss_cipher"),
             ss_password=body.get("ss_password"),
+            max_devices=int(body.get("max_devices") or 0),
         )
         if link.protocol == "shadowsocks":
             link.ss_cipher = link.ss_cipher if link.ss_cipher in (
@@ -262,6 +263,8 @@ class Core:
             link.limit_bytes = max(0, int(body["limit_bytes"] or 0))
         if "expires_at" in body:
             link.expires_at = body["expires_at"]
+        if "max_devices" in body:
+            link.max_devices = max(0, int(body["max_devices"] or 0))
 
     def _read_process_metrics(self) -> dict:
         proc = psutil.Process()

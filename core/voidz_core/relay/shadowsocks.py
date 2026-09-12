@@ -243,6 +243,12 @@ async def shadowsocks_ws_tunnel(ctx: RelayContext, ws: WebSocket) -> None:
             await ws.close(code=1008, reason="not authorized")
             return
 
+        if not ctx.connections.device_slot_available(link.uuid, ip, link.max_devices):
+            log.warning("ss rejected [%s] uuid=%s ip=%s (device limit %d reached)",
+                       conn_id, link.uuid[:8], ip, link.max_devices)
+            await ws.close(code=1008, reason="device limit reached")
+            return
+
         first_chunk = bytes(raw)
         ctx.connections.register(conn_id, uuid=link.uuid, ip=ip, transport="shadowsocks-ws")
         log.info("ss open [%s] uuid=%s ip=%s", conn_id, link.uuid[:8], ip)

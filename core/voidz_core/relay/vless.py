@@ -84,6 +84,10 @@ async def vless_ws_tunnel(ctx: RelayContext, ws: WebSocket, uuid: str) -> None:
         return
 
     ip = ws_client_ip(ws)
+    if not ctx.connections.device_slot_available(uuid, ip, link.max_devices):
+        log.warning("ws rejected uuid=%s ip=%s (device limit %d reached)", uuid[:8], ip, link.max_devices)
+        await ws.close(code=1008, reason="device limit reached")
+        return
     conn_id = secrets.token_urlsafe(6)
     ctx.connections.register(conn_id, uuid=uuid, ip=ip, transport="vless-ws")
     log.info("ws open [%s] uuid=%s ip=%s active=%d", conn_id, uuid[:8], ip, ctx.connections.count())
