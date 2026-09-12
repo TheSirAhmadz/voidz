@@ -1,0 +1,144 @@
+# Deploying Voidz
+
+Three supported targets:
+
+1. **One-click (Lucity / Railway-style)** — deploy the repository root as a
+   single service. The unified entrypoint (`main.py`) runs the Console, the
+   Worker, and Core-instance management in one process tree: fork → deploy →
+   sign in → Create Instance.
+2. **Lucity multi-service** — console (public domain) + worker
+   (internal-only) as separate services.
+3. **Self-hosted Docker** — full control, optional wildcard-domain edge.
+
+---
+
+## 1. One-click deploy (recommended, zero required variables)
+
+Voidz runs out of the box with **no environment variables at all**: with no
+database configured it uses embedded SQLite (persisted under `/data`), and
+with no GitHub OAuth configured the first visitor creates the admin account
+via the built-in setup screen.
+
+### Lucity
+
+1. **Fork** this repository to your GitHub account.
+2. **Add a service** from your fork:
+   - Source: your fork, root directory `/` (repository root)
+   - Port: leave the detected port / set `8080`; start command `python main.py`
+   - **Generate a domain** in the service settings → this URL is the whole
+     platform (console UI, API, and all instance endpoints under `/i/<token>`,
+     WebSocket + automatic TLS included).
+3. **Deploy.** Open your domain → sign in with the built-in account
+   **admin / admin** → **Create Instance** → Deploy → the instance page shows
+   a ready endpoint (`https://<your-domain>/i/<token>`) → import the generated
+   link into v2rayNG / NekoBox / Streisand.
+
+> Change the default password right after first login (Admin → System →
+> Change your password). Set `VOIDZ_DEFAULT_ADMIN=0` to disable seeding.
+
+That's the whole deployment. Optional hardening once it runs:
+
+| Upgrade | How |
+|---|---|
+| PostgreSQL instead of SQLite | Provision a database in the project, then on the service add a **database ref** variable: key `DATABASE_URL`, database `voidz`, key `uri`. Redeploy. (Lucity requires this explicit ref — see its docs; Voidz auto-detects `DATABASE_URL` and all `PG*` variants.) |
+| GitHub sign-in instead of password | Create a GitHub OAuth App (callback `https://<your-domain>/auth/callback`), set `VOIDZ_GITHUB_CLIENT_ID` / `VOIDZ_GITHUB_CLIENT_SECRET` as service variables. |
+| Public-domain metadata | Set `VOIDZ_PUBLIC_URL=https://<your-domain>` and `VOIDZ_COOKIE_SECURE=1`. |
+
+Data note: SQLite persists in `/data/voidz.db`; attach a Lucity volume to
+`/data` so it survives redeploys, or switch to PostgreSQL as above.
+
+> **Instance isolation note:** on managed platforms the unified service uses
+> the **process driver** (OS rlimits + per-instance data dirs). Container-level
+> isolation (Docker driver) applies in self-hosted mode, or when the platform
+> supports DinD-sidecars.
+
+### Railway (optional per-instance-domains mode)
+
+Set `VOIDZ_RAILWAY_TOKEN`, and project/environment IDs (auto-injected when
+the console itself runs on Railway). Each instance is then deployed as its
+own Railway service with a generated public domain — verified against the
+current Railway GraphQL API. Without those variables, Railway uses the same
+single-service behavior as above.
+
+---
+
+## 2. Lucity multi-service (separate worker node)
+
+For larger deployments, split the console and worker:
+
+| Service | Root directory | Port | Domain | Notes |
+|---|---|---|---|---|
+| `console` | `console/api` | 8080 | **attach** (public) | env vars as in section 1 + `VOIDZ_LOCAL_WORKER_URL=http://worker:9100` |
+| `worker` | `worker` | 9100 | **none** (internal-only) | `VOIDZ_WORKER_TOKEN` shared with console; `VOIDZ_CONSOLE_URL=http://console:8080`; set `VOIDZ_CORE_PYTHON=python`, `VOIDZ_CORE_CWD=core` with root-directory context containing `core/` |
+
+Services without domains are internal-only on Lucity — exactly what the
+worker should be. The console remains the only public endpoint.
+
+---
+
+## 3. Self-hosted Docker
+
+```bash
+export VOIDZ_PG_PASSWORD=$(openssl rand -hex 16)
+export VOIDZ_SECRET_KEY=$(openssl rand -hex 32)
+export VOIDZ_WORKER_TOKEN=$(openssl rand -hex 32)
+export VOIDZ_PUBLIC_URL=https://voidz.example.com
+export VOIDZ_GITHUB_CLIENT_ID=...
+export VOIDZ_GITHUB_CLIENT_SECRET=...
+export VOIDZ_ADMIN_GITHUB_LOGIN=yourlogin
+export VOIDZ_COOKIE_SECURE=1
+
+cd deploy/docker && docker compose up -d --build
+```
+
+- Console: `http://127.0.0.1:8080` (put your own TLS proxy in front, or
+  uncomment the `caddy` service for automatic Let's Encrypt).
+- Worker: uses the **process driver** by default inside its container.
+  For real container isolation enable the Docker driver:
+  uncomment the docker.sock mount (read-only, worker only) and set
+  `VOIDZ_WORKER_DRIVER=docker`, then build the Core image:
+  `docker build -t voidz/core:latest ../../core`.
+- Optional wildcard endpoints: point `*.voidz.example.com` at the host and
+  uncomment the Caddy service (`deploy/proxy/Caddyfile.template`).
+
+---
+
+## Environment variables reference
+
+### Console / unified service
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `PORT` | `8080` | Public listen port (platform-injected) |
+| `VOIDZ_DATABASE_URL` | falls back to `DATABASE_URL` | PostgreSQL DSN |
+| `VOIDZ_SECRET_KEY` | auto-generated + persisted | Session hashing context |
+| `VOIDZ_WORKER_TOKEN` | auto-generated (unified) / required (split) | Shared secret with workers |
+| `VOIDZ_GITHUB_CLIENT_ID/SECRET` | — | OAuth login |
+| `VOIDZ_PUBLIC_URL` | `http://127.0.0.1:$PORT` | Canonical console origin (OAuth redirect, endpoint URLs) |
+| `VOIDZ_ADMIN_GITHUB_LOGIN` | — | Bootstrap admin |
+| `VOIDZ_COOKIE_SECURE` | `0` | Set `1` behind HTTPS |
+| `VOIDZ_LOCAL_WORKER_URL` | auto (unified) / `http://127.0.0.1:9100` | Default worker API |
+| `VOIDZ_DOMAIN_ROOT` | `voidz.app` | Informational for provider domains |
+
+### Worker (split deployments)
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `VOIDZ_WORKER_TOKEN` | — (required) | Shared secret |
+| `VOIDZ_CONSOLE_URL` | — | Heartbeat target (optional) |
+| `VOIDZ_NODE_ID` / `VOIDZ_NODE_REGION` | `local` | Scheduler identity |
+| `VOIDZ_WORKER_DRIVER` | auto (`docker` if available, else `process`) | Isolation driver |
+| `VOIDZ_WORKER_DATA` | `/var/lib/voidz/instances` | Instance data root |
+| `VOIDZ_WORKER_PORT_START/END` | `19000-19999` | Port allocation range |
+| `VOIDZ_CORE_PYTHON` / `VOIDZ_CORE_CWD` | `.venv/bin/python` / — | How to launch Core (process driver) |
+| `VOIDZ_NODE_CAPACITY` | `20` | Max instances reported to scheduler |
+
+### Core
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `PORT` | `8000` | Listen port (allocated automatically by the worker) |
+| `VOIDZ_CORE_API_TOKEN` | — | Management API bearer (required for it to be enabled) |
+| `VOIDZ_STATE_PATH` | `/data/state.json` | Persistence |
+| `VOIDZ_LOG_LEVEL` / `VOIDZ_LOG_JSON` | `info` / `0` | Logging |
+| `VOIDZ_VERSION` / `VOIDZ_BUILD` / `VOIDZ_COMMIT` | `1.0.0`/`dev`/`unknown` | Version report |
