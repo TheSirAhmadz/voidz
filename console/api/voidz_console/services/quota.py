@@ -26,7 +26,13 @@ from . import workers as worker_svc
 
 log = get("runtime", "voidz.console.quota")
 
-RECONCILE_INTERVAL = 60.0
+RECONCILE_INTERVAL = 20.0
+DEVICE_CHECK_INTERVAL = 15.0
+
+# Customer ids currently link-suppressed for exceeding their device cap. A
+# single console process, so plain in-memory state is fine — it just means a
+# restart forgets any in-progress suppression and re-evaluates fresh next tick.
+_device_suppressed: set[str] = set()
 
 
 def _utcnow() -> datetime:
@@ -202,6 +208,82 @@ async def _sum_usage(pool, plan_id: str, cred_uuid: str) -> int:
             if link.get("uuid") in wanted:
                 total += int(link.get("used_bytes") or 0)
     return total
+
+
+async def _global_device_ips(pool, plan_id: str, cred_uuid: str, protocols: list[str]) -> set[str]:
+    """Distinct client IPs currently holding an open connection on this
+    customer's link, unioned across every region — each region's Core only
+    knows about its own connections, so a per-region count can't catch a
+    customer connected from two different regions at once."""
+    wanted = ",".join(_link_uuid(cred_uuid, proto) for proto in protocols)
+    ips: set[str] = set()
+    for pi in await _plan_instances(pool, plan_id):
+        worker_url = await _instance_worker(pool, pi["instance_id"])
+        if not worker_url:
+            continue
+        try:
+            data = await worker_svc.worker_call(
+                worker_url, "GET",
+                f"/worker/api/instances/{pi['instance_id']}/proxy/core/api/connections?uuids={wanted}",
+            )
+        except worker_svc.WorkerError:
+            continue
+        for conn in data.get("connections", []):
+            ip = conn.get("ip")
+            if ip:
+                ips.add(ip)
+    return ips
+
+
+async def enforce_device_limits(pool) -> None:
+    """Fast-ticking pass: sum a customer's connections across every region
+    and suppress (or restore) their links the moment they exceed their
+    device cap. Runs far more often than the byte/expiry reconcile because a
+    second device sneaking on is a now-problem, not a wait-a-minute one."""
+    rows = await pool.fetch(
+        "SELECT id, plan_id, cred_uuid, name, active, max_devices FROM customers "
+        "WHERE active = TRUE AND max_devices > 0"
+    )
+    seen_ids = set()
+    for c in rows:
+        seen_ids.add(c["id"])
+        protocols = await _plan_protocols(pool, c["plan_id"])
+        try:
+            ips = await _global_device_ips(pool, c["plan_id"], c["cred_uuid"], protocols)
+        except Exception as exc:
+            log.warning("device check failed for customer %s: %s", c["id"], exc)
+            continue
+        over_limit = len(ips) > c["max_devices"]
+        was_suppressed = c["id"] in _device_suppressed
+        if over_limit and not was_suppressed:
+            _device_suppressed.add(c["id"])
+            await set_customer_active(pool, c["plan_id"], c["cred_uuid"], False)
+            log.info("customer %s (%s) suppressed: %d devices > limit %d",
+                     c["name"], c["id"], len(ips), c["max_devices"])
+        elif not over_limit and was_suppressed:
+            _device_suppressed.discard(c["id"])
+            await set_customer_active(pool, c["plan_id"], c["cred_uuid"], True)
+            log.info("customer %s (%s) restored: back within device limit", c["name"], c["id"])
+    # Drop bookkeeping for customers that got disabled/deleted elsewhere in
+    # the meantime so the set doesn't grow forever.
+    _device_suppressed.intersection_update(seen_ids)
+
+
+async def device_enforce_loop() -> None:
+    """Background task: enforce per-customer device caps every tick.
+    Started from the app lifespan; runs until cancelled on shutdown."""
+    from ..db import get_pool
+
+    while True:
+        await asyncio.sleep(DEVICE_CHECK_INTERVAL)
+        try:
+            pool = get_pool(None)
+        except RuntimeError:
+            continue  # DB not ready yet on the very first tick
+        try:
+            await enforce_device_limits(pool)
+        except Exception as exc:  # a bad tick must never kill the loop
+            log.warning("device enforce tick failed: %s", exc)
 
 
 async def reconcile_once(pool) -> None:

@@ -82,10 +82,14 @@ async def lifespan(_app):
     await init_pool()
     log.info("Voidz Console %s started", version.version())
     quota_task = asyncio.create_task(quota_svc.reconcile_loop())
+    device_task = asyncio.create_task(quota_svc.device_enforce_loop())
     yield
     quota_task.cancel()
+    device_task.cancel()
     with contextlib.suppress(asyncio.CancelledError):
         await quota_task
+    with contextlib.suppress(asyncio.CancelledError):
+        await device_task
     await close_db()
     log.info("Voidz Console stopped")
 

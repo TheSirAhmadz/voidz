@@ -130,8 +130,9 @@ class Core:
             }
 
         @app.get("/core/api/connections")
-        async def core_connections(_=Depends(guard)):
-            grouped = self.connections.grouped_by_ip()
+        async def core_connections(uuids: str = "", _=Depends(guard)):
+            uuid_filter = {u for u in uuids.split(",") if u} or None
+            grouped = self.connections.grouped_by_ip(uuid_filter)
             return {"connections": grouped, "count": len(grouped), "raw_count": self.connections.count()}
 
         @app.get("/core/api/logs")

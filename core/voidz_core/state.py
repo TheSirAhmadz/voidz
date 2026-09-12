@@ -209,9 +209,11 @@ class ConnectionTracker:
         ips = self.active_ips_for(uuid)
         return ip in ips or len(ips) < max_devices
 
-    def grouped_by_ip(self) -> list[dict]:
+    def grouped_by_ip(self, uuid_filter: set[str] | None = None) -> list[dict]:
         grouped: dict[str, dict] = {}
         for c in self._conns.values():
+            if uuid_filter is not None and c["uuid"] not in uuid_filter:
+                continue
             g = grouped.setdefault(
                 c["ip"],
                 {"ip": c["ip"], "sessions": 0, "bytes": 0, "transports": set(),

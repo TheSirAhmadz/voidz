@@ -59,7 +59,7 @@ def _page(title: str, body: str, status: int = 200) -> "HTMLResponse":
 import json as _json_mod  # noqa: E402
 
 def _sub_html_page(title: str, configs: list, host: str, sub_path: str,
-                   qr_path: str = "") -> str:
+                   qr_path: str = "", info: dict | None = None) -> str:
     """Premium subscription page: QRs inline, copy buttons, app links,
     EN/FA toggle. Browsers get it; clients are UA-sniffed to raw data."""
     import html as _html
@@ -105,6 +105,54 @@ def _sub_html_page(title: str, configs: list, host: str, sub_path: str,
     sb_url = f"https://{host}{sub_path}?fmt=singbox&host={host}"
     cl_url = f"https://{host}{sub_path}?fmt=clash&host={host}"
 
+    info_card = ""
+    if info is not None:
+        used_gb = info["used_gb"]
+        total_gb = info.get("total_gb")
+        pct = max(0.0, min(100.0, info.get("pct") or 0.0))
+        unlimited = total_gb is None
+        ring_circ = 2 * 3.14159265 * 42
+        ring_offset = ring_circ * (1 - (0 if unlimited else pct / 100))
+        ring_color = "#ef6b73" if pct > 90 else ("#e3b341" if pct > 70 else "#35d7dc")
+        days_left = info.get("days_left")
+        days_total = info.get("days_total")
+        no_expiry = info.get("no_expiry", True)
+        online_count = info.get("online_count", 0)
+        max_devices = info.get("max_devices") or 0
+        is_online = online_count > 0
+        data_lbl = (f"{used_gb:.2f} GB <span class='sm'>used</span>" if unlimited
+                   else f"{used_gb:.2f} <span class='sm'>/ {total_gb:.0f} GB</span>")
+        day_val = "∞" if no_expiry else str(max(0, days_left))
+        day_lbl = ("unlimited" if no_expiry else f"of {days_total} days total")
+        day_lbl_fa = ("نامحدود" if no_expiry else f"از {days_total} روز کل")
+        dev_val = f"{online_count}/{max_devices}" if max_devices else str(online_count)
+        info_card = f'''
+        <div class="card stat-card">
+          <div class="stats">
+            <div class="stat">
+              <div class="ring-wrap">
+                <svg viewBox="0 0 100 100" class="ring">
+                  <circle cx="50" cy="50" r="42" class="ring-bg"/>
+                  <circle cx="50" cy="50" r="42" class="ring-fg" style="stroke:{ring_color};stroke-dasharray:{ring_circ:.1f};stroke-dashoffset:{ring_circ:.1f}" data-offset="{ring_offset:.1f}"/>
+                </svg>
+                <div class="ring-mid">{data_lbl}</div>
+              </div>
+              <div class="stat-lbl en">Data used</div>
+              <div class="stat-lbl fa" hidden>حجم مصرفی</div>
+            </div>
+            <div class="stat">
+              <div class="big-num">{day_val}</div>
+              <div class="stat-lbl en">{"Unlimited" if no_expiry else "days left"} <span class="sm">{"" if no_expiry else "· "+day_lbl}</span></div>
+              <div class="stat-lbl fa" hidden>{"نامحدود" if no_expiry else "روز باقیمانده"} <span class="sm">{"" if no_expiry else "· "+day_lbl_fa}</span></div>
+            </div>
+            <div class="stat">
+              <div class="dev-pill {'on' if is_online else 'off'}"><span class="dot"></span>{dev_val}</div>
+              <div class="stat-lbl en">{"Online now" if is_online else "Offline"}</div>
+              <div class="stat-lbl fa" hidden>{"الان آنلاین" if is_online else "آفلاین"}</div>
+            </div>
+          </div>
+        </div>'''
+
     return f"""<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>{esc(title)}</title>
@@ -148,6 +196,25 @@ h1{{font-size:22px;margin:0;letter-spacing:.3px;font-weight:750}}
 body.fa .en{{display:none}}
 body.fa .fa{{display:inline}}
 #lang{{position:fixed;top:14px;right:14px;z-index:9;background:rgba(20,26,37,.7);backdrop-filter:blur(12px);border:1px solid rgba(148,175,199,.2);color:#9fb0c3;border-radius:999px;padding:4px 12px;font-size:11px;cursor:pointer}}
+.stat-card{{padding:20px 14px}}
+.stats{{display:flex;justify-content:space-around;align-items:center;gap:6px;flex-wrap:wrap}}
+.stat{{display:flex;flex-direction:column;align-items:center;gap:8px;min-width:92px}}
+.ring-wrap{{position:relative;width:96px;height:96px}}
+.ring{{width:96px;height:96px;transform:rotate(-90deg)}}
+.ring-bg{{fill:none;stroke:rgba(148,175,199,.16);stroke-width:8}}
+.ring-fg{{fill:none;stroke-width:8;stroke-linecap:round;transition:stroke-dashoffset 1.1s cubic-bezier(.22,.9,.35,1)}}
+.ring-mid{{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;text-align:center;font-size:12.5px;font-weight:700;line-height:1.2;padding:0 6px}}
+.ring-mid .sm{{display:block;font-weight:500;color:#9fb0c3;font-size:10px}}
+.big-num{{font-size:34px;font-weight:800;line-height:1;background:linear-gradient(135deg,#35d7dc,#8b7bff);-webkit-background-clip:text;background-clip:text;color:transparent;animation:pop .5s cubic-bezier(.22,.9,.35,1)}}
+.stat-lbl{{font-size:11.5px;color:#9fb0c3;text-align:center}}
+.stat-lbl .sm{{color:#6b7a8f;font-size:10px}}
+.dev-pill{{display:flex;align-items:center;gap:7px;font-size:15px;font-weight:700;padding:9px 16px;border-radius:999px;border:1px solid rgba(148,175,199,.2);background:rgba(255,255,255,.03)}}
+.dev-pill.on{{border-color:rgba(78,203,149,.5);color:#4ecb95}}
+.dev-pill.off{{color:#9fb0c3}}
+.dot{{width:8px;height:8px;border-radius:50%;background:#5c6b80;flex:none}}
+.dev-pill.on .dot{{background:#4ecb95;box-shadow:0 0 0 rgba(78,203,149,.6);animation:pulse 1.8s infinite}}
+@keyframes pulse{{0%{{box-shadow:0 0 0 0 rgba(78,203,149,.55)}}70%{{box-shadow:0 0 0 9px rgba(78,203,149,0)}}100%{{box-shadow:0 0 0 0 rgba(78,203,149,0)}}}}
+@keyframes pop{{0%{{transform:scale(.7);opacity:0}}100%{{transform:scale(1);opacity:1}}}}
 </style></head><body>
 <button id="lang" onclick="document.body.classList.toggle('fa');this.textContent=document.body.classList.contains('fa')?'EN':'فارسی'">فارسی</button>
 <div class="w">
@@ -156,6 +223,7 @@ body.fa .fa{{display:inline}}
 <div class="hero"><h2 class="en">Your configs are ready</h2><h2 class="fa" hidden>کانفیگ‌های شما آماده است</h2>
 <p class="en">Import the subscription into your client, or copy each config individually.</p>
 <p class="fa" hidden>سابسکریپشن را وارد کلاینت کنید یا هر کانفیگ را جدا کپی کنید.</p></div>
+{info_card}
 <div class="card">
 <h3 class="en">Subscription — all protocols</h3><h3 class="fa" hidden>سابسکریپشن — همه پروتکل‌ها</h3>
 <p class="lbl en">One URL, every config, auto-updates. Add it under Subscriptions in your client.</p>
@@ -184,6 +252,9 @@ body.fa .fa{{display:inline}}
 function cp(id){{navigator.clipboard.writeText(document.getElementById(id).textContent.trim()).then(function(){{
 var t=document.createElement('div');t.textContent='Copied \u2713';t.style.cssText='position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:#171b24;border:1px solid #2a3242;color:#4ecb95;padding:8px 18px;border-radius:999px;font-size:13px;z-index:99';document.body.appendChild(t);setTimeout(function(){{t.remove()}},1800)}})}}
 function tg(id,btn){{var b=document.getElementById(id);var open=b.style.display!=='block';b.style.display=open?'block':'none';btn.textContent=open?'Hide':'QR'}}
+requestAnimationFrame(function(){{requestAnimationFrame(function(){{
+  document.querySelectorAll('.ring-fg').forEach(function(el){{el.style.strokeDashoffset=el.dataset.offset}})
+}})}})
 </script></body></html>"""
 
 def _singbox_outbound(url: str) -> dict:
@@ -580,7 +651,41 @@ async def plan_subscription(sub_token: str, request: Request):
     if looks_like_browser and not fmt:
         from fastapi.responses import HTMLResponse
 
-        return HTMLResponse(_sub_html_page(title, configs, host, f"/sub/{sub_token}"))
+        device_ips: set[str] = set()
+        wanted_str = ",".join(wanted_uuids)
+        for pi in pi_rows:
+            if pi["status"] != "running":
+                continue
+            worker_url = worker_url_for(pi["node_id"] or "local")
+            try:
+                conn_data = await worker_svc.worker_call(
+                    worker_url, "GET",
+                    f"/worker/api/instances/{pi['instance_id']}/proxy/core/api/connections?uuids={wanted_str}",
+                )
+            except worker_svc.WorkerError:
+                continue
+            for conn in conn_data.get("connections", []):
+                if conn.get("ip"):
+                    device_ips.add(conn["ip"])
+
+        limit_bytes = int(cust["limit_bytes"] or 0)
+        used_bytes = int(cust["used_bytes_cached"] or 0)
+        no_expiry = cust["expires_at"] is None
+        days_left = days_total = None
+        if not no_expiry:
+            days_left = max(0, (cust["expires_at"] - now).days)
+            days_total = max(1, (cust["expires_at"] - cust["created_at"]).days)
+        info = {
+            "used_gb": used_bytes / (1024 ** 3),
+            "total_gb": (limit_bytes / (1024 ** 3)) if limit_bytes else None,
+            "pct": (used_bytes / limit_bytes * 100) if limit_bytes else 0,
+            "days_left": days_left,
+            "days_total": days_total,
+            "no_expiry": no_expiry,
+            "online_count": len(device_ips),
+            "max_devices": int(cust["max_devices"] or 0),
+        }
+        return HTMLResponse(_sub_html_page(title, configs, host, f"/sub/{sub_token}", info=info))
 
     def _headers(extra: dict | None = None) -> dict:
         expire_ts = int(cust["expires_at"].timestamp()) if cust["expires_at"] else 0
