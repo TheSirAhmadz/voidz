@@ -27,7 +27,7 @@ from . import workers as worker_svc
 log = get("runtime", "voidz.console.quota")
 
 RECONCILE_INTERVAL = 20.0
-DEVICE_CHECK_INTERVAL = 15.0
+DEVICE_CHECK_INTERVAL = 5.0
 
 # Last allowed_ips tuple pushed to Core for each customer, so a tick only
 # PATCHes every region when the locked device set actually changed. A single
