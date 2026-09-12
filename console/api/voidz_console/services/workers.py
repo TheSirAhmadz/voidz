@@ -71,3 +71,15 @@ def worker_url_for(node_id: str) -> str:
 
     return os.environ.get(f"VOIDZ_WORKER_URL_{node_id.upper().replace('-', '_')}",
                           settings.local_worker_url)
+
+
+def worker_public_base(node_id: str) -> str | None:
+    """The worker's own public base URL, reachable directly by end-user
+    clients — or None when this node has no such thing (the embedded
+    'local' worker only exposes a loopback address; its instances stay
+    reachable only through the console's own gateway)."""
+    if node_id == settings.default_worker_node:
+        return None
+    import os
+
+    return os.environ.get(f"VOIDZ_WORKER_URL_{node_id.upper().replace('-', '_')}") or None

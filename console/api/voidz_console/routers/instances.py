@@ -403,18 +403,30 @@ async def instance_config(instance_id: str, request: Request,
         "SELECT link_uuid, label FROM instance_links WHERE instance_id = $1 ORDER BY created_at",
         instance_id,
     )
-    node_url, _ = await _worker_for(pool, instance_id)
+    node_url, node_id = await _worker_for(pool, instance_id)
+
+    from ..config import settings as _settings
+    from ..security import direct_token
+    from ..services.workers import worker_public_base
+
+    # Direct-region path: skip the console hairpin when this instance's
+    # worker has its own public domain, same as the multi-region /sub flow.
+    direct_base = worker_public_base(node_id) if node_id else None
+    share_host, share_prefix = host, path_prefix
+    if direct_base:
+        share_host = direct_base.split("://", 1)[-1].split(":")[0]
+        share_prefix = f"/pub/{direct_token.encode(instance_id, _settings.worker_token)}"
+
     configs = []
     error = None
     if node_url:
         try:
             import httpx as _httpx
-            from ..config import settings as _settings
 
             async with _httpx.AsyncClient(timeout=15) as client:
                 resp = await client.post(
                     f"{node_url.rstrip('/')}/worker/api/instances/{instance_id}/proxy/core/api/share",
-                    json={"host": host, "path_prefix": path_prefix,
+                    json={"host": share_host, "path_prefix": share_prefix,
                           "uuids": [r["link_uuid"] for r in link_rows]},
                     headers={"Authorization": f"Bearer {_settings.worker_token}",
                              "Content-Type": "application/json"},
@@ -423,6 +435,10 @@ async def instance_config(instance_id: str, request: Request,
                 configs = resp.json().get("links", [])
         except Exception as exc:
             error = str(exc)[:200]
+    # endpoint_path/hostname stay the ORIGINAL /i/{token} bootstrap values —
+    # the panel derives the subscription URL (/i/{token}/sub) from these, a
+    # separate mechanism from share_prefix/share_host above (which only
+    # affect the individual protocol config links returned in `configs`).
     return {"endpoint_path": path_prefix, "hostname": host,
             "configs": configs, "error": error}
 

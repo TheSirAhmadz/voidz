@@ -36,9 +36,19 @@ from fastapi import Depends, FastAPI, HTTPException, Request, WebSocket
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 
 from . import registry
+from .direct_token import decode as decode_direct_token
 from .driver import BaseDriver, DriverError, LaunchSpec, select_driver
 from .logging import get, setup_logging
 from .version import info as worker_info
+
+# Client-facing transport paths Core actually exposes (see core/voidz_core/app.py):
+# ws/{uuid} (VLESS), trojan-ws, ss-ws, and the xhttp packet-up/stream-up/downlink
+# routes. Nothing under core/api/* (the Core management API) may ever be reached
+# through a token-authenticated public route — only through the bearer-token
+# -protected /proxy route below, which only the Console itself can call.
+def _is_public_client_path(path: str) -> bool:
+    return (path in ("trojan-ws", "ss-ws")
+            or path.startswith(("ws/", "xhttp-siz10/", "txhttp-siz10/")))
 
 setup_logging(os.environ.get("VOIDZ_LOG_LEVEL", "info"))
 log = get("runtime", "voidz.worker")
@@ -218,6 +228,25 @@ async def instance_logs(instance_id: str, tail: int = 200, _=Depends(require_wor
 async def instance_proxy(instance_id: str, path: str, request: Request, _=Depends(require_worker_token)):
     """Internal reverse proxy into an instance's Core (used by the Console for
     its management API calls and by the edge proxy for public traffic)."""
+    return await _forward_http(instance_id, path, request)
+
+
+@app.api_route("/pub/{token}/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS", "HEAD"])
+async def direct_http_proxy(token: str, path: str, request: Request):
+    """Public, token-authenticated direct entry into this worker's own
+    instances — lets clients connect straight to this region instead of
+    hairpinning through the console gateway. Only the client-facing
+    transport paths are reachable here; the Core management API stays
+    behind the bearer-token /proxy route above."""
+    if not _is_public_client_path(path):
+        raise HTTPException(status_code=404, detail="not found")
+    instance_id = decode_direct_token(token, WORKER_TOKEN)
+    if instance_id is None:
+        raise HTTPException(status_code=404, detail="not found")
+    return await _forward_http(instance_id, path, request)
+
+
+async def _forward_http(instance_id: str, path: str, request: Request):
     try:
         status = await driver.status(instance_id)
     except DriverError as exc:
@@ -268,8 +297,6 @@ async def instance_ws_proxy(ws: WebSocket, instance_id: str, path: str):
     """WebSocket relay into an instance's Voidz Core (authenticated via the
     worker token passed as query param, since browsers cannot set headers
     on WebSocket connects)."""
-    import websockets as ws_lib
-
     # Accept first so later rejections carry proper close codes instead of
     # Starlette's generic HTTP 403 rejection.
     await ws.accept()
@@ -277,6 +304,29 @@ async def instance_ws_proxy(ws: WebSocket, instance_id: str, path: str):
     if not token or not secrets.compare_digest(token, WORKER_TOKEN):
         await ws.close(code=1008, reason="unauthorized")
         return
+    await _forward_ws(instance_id, path, ws)
+
+
+@app.websocket("/pub/{token}/{path:path}")
+async def direct_ws_proxy(ws: WebSocket, token: str, path: str):
+    """Public, token-authenticated direct WebSocket entry into this worker's
+    own instances — the actual VLESS/Trojan/Shadowsocks data path clients
+    use once they have a direct-region config. Same path allowlist as the
+    HTTP counterpart: nothing under Core's management API is reachable here."""
+    await ws.accept()
+    if not _is_public_client_path(path):
+        await ws.close(code=1008, reason="not found")
+        return
+    instance_id = decode_direct_token(token, WORKER_TOKEN)
+    if instance_id is None:
+        await ws.close(code=1008, reason="not found")
+        return
+    await _forward_ws(instance_id, path, ws)
+
+
+async def _forward_ws(instance_id: str, path: str, ws: WebSocket) -> None:
+    import websockets as ws_lib
+
     try:
         status = await driver.status(instance_id)
     except DriverError:

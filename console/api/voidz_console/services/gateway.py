@@ -37,6 +37,18 @@ HOP_BY_HOP = {
     "authorization",  # replaced with the worker token below
 }
 
+# Client-facing transport paths Core actually exposes (core/voidz_core/app.py):
+# ws/{uuid} (VLESS), trojan-ws, ss-ws, xhttp packet-up/stream-up/downlink.
+# The endpoint token only proves "this is a legitimate subscriber of this
+# instance" — it must never be enough to reach Core's own management API
+# (core/api/*), which would let any subscriber list/edit/delete every
+# customer's credentials on that instance. Only the worker-token-authed
+# internal proxy (called by the Console itself, e.g. services/quota.py) may
+# reach those paths.
+def _is_public_client_path(path: str) -> bool:
+    return (path in ("trojan-ws", "ss-ws")
+            or path.startswith(("ws/", "xhttp-siz10/", "txhttp-siz10/")))
+
 
 FRIENDLY_404 = """<!doctype html><html><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1"><title>Voidz</title>
@@ -391,6 +403,7 @@ async def _resolve_endpoint(request: Request, token: str) -> dict | None:
 
     return {
         "instance_id": str(row["id"]),
+        "node_id": row["node_id"] or "local",
         "worker_url": worker_url_for(row["node_id"] or "local"),
         "upstream": f"/worker/api/instances/{row['id']}/proxy",
     }
@@ -477,11 +490,21 @@ async def instance_subscription(token: str, request: Request):
             or request.headers.get("host") or "").split(":")[0]
     if not host:
         return _page("Missing host", "Append ?host=<your-domain> to this URL.", status=400)
+
+    from ..security import direct_token
+    from ..services.workers import worker_public_base
+
+    direct_base = worker_public_base(target["node_id"])
+    if direct_base:
+        share_host = direct_base.split("://", 1)[-1].split(":")[0]
+        share_prefix = f"/pub/{direct_token.encode(target['instance_id'], _settings.worker_token)}"
+    else:
+        share_host, share_prefix = host, f"/i/{token}"
     try:
         async with _httpx.AsyncClient(timeout=15) as client:
             resp = await client.post(
                 f"{target['worker_url'].rstrip('/')}{target['upstream']}/core/api/share",
-                json={"host": host, "path_prefix": f"/i/{token}", "uuids": []},
+                json={"host": share_host, "path_prefix": share_prefix, "uuids": []},
                 headers={"Authorization": f"Bearer {_settings.worker_token}",
                          "Content-Type": "application/json"},
             )
@@ -609,16 +632,32 @@ async def plan_subscription(sub_token: str, request: Request):
     plan_protocols = [p for p in (plan_protocols_str or "").split(",") if p]
     wanted_uuids = [_link_uuid(cust["cred_uuid"], proto) for proto in plan_protocols]
 
+    from ..config import settings as _settings
+    from ..security import direct_token
+    from ..services.workers import worker_public_base
+
     configs = []
     for pi in pi_rows:
         if pi["status"] != "running" or not pi["endpoint_token"]:
             continue
-        worker_url = worker_url_for(pi["node_id"] or "local")
+        node_id = pi["node_id"] or "local"
+        worker_url = worker_url_for(node_id)
+        # Direct-region path: when this instance's worker has its own public
+        # domain, point the client straight at it instead of hairpinning
+        # through this console — every region otherwise shares this one
+        # entry point, which makes them all measure identical latency no
+        # matter which region a config claims to be.
+        direct_base = worker_public_base(node_id)
+        if direct_base:
+            share_host = direct_base.split("://", 1)[-1].split(":")[0]
+            share_prefix = f"/pub/{direct_token.encode(pi['instance_id'], _settings.worker_token)}"
+        else:
+            share_host, share_prefix = host, f"/i/{pi['endpoint_token']}"
         try:
             data = await worker_svc.worker_call(
                 worker_url, "POST",
                 f"/worker/api/instances/{pi['instance_id']}/proxy/core/api/share",
-                {"host": host, "path_prefix": f"/i/{pi['endpoint_token']}",
+                {"host": share_host, "path_prefix": share_prefix,
                  "uuids": wanted_uuids},
             )
         except worker_svc.WorkerError:
@@ -724,6 +763,8 @@ async def plan_subscription(sub_token: str, request: Request):
 
 @router.api_route("/i/{token}/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS", "HEAD"])
 async def instance_http_gateway(token: str, path: str, request: Request):
+    if not _is_public_client_path(path):
+        return _page("Not found", "This path isn't a valid proxy endpoint.", status=404)
     target = await _resolve_endpoint(request, token)
     if target is None:
         return _page(
@@ -790,6 +831,9 @@ async def instance_ws_gateway(ws: WebSocket, token: str, path: str):
     worker's ws-proxy and pump frames in both directions.
     """
     await ws.accept()
+    if not _is_public_client_path(path):
+        await ws.close(code=1008, reason="not found")
+        return
     try:
         target = await _resolve_endpoint(ws, token)
     except Exception as _exc:
