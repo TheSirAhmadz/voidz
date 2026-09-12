@@ -88,9 +88,10 @@ def _sub_html_page(title: str, configs: list, host: str, sub_path: str,
     for i, c in enumerate(configs):
         pname, transport, color = PROTO_META.get(c["protocol"], (c["protocol"], "", "#6f9bff"))
         qr = qr_svg(c["share_url"])
+        region_chip = f'<span class="chip" style="margin-right:5px">{esc(c["region"])}</span>' if c.get("region") else ""
         cards += f'''
         <div class="cfg" style="--pc:{color}">
-          <div class="ch"><div><span class="pn">{esc(pname)}</span><span class="tr">{esc(transport)}</span></div><span class="chip">{esc(c["protocol"])}</span></div>
+          <div class="ch"><div><span class="pn">{esc(pname)}</span><span class="tr">{esc(transport)}</span></div><div>{region_chip}<span class="chip">{esc(c["protocol"])}</span></div></div>
           <div class="u" id="u{i}">{esc(c["share_url"])}</div>
           <div class="row">
             <button onclick="cp(\'u{i}\')">Copy <span class="en">config</span><span class="fa" hidden>کانفیگ</span></button>
@@ -470,6 +471,134 @@ async def instance_subscription(token: str, request: Request):
         payload = _json.dumps({"outbounds": outbounds}, ensure_ascii=False, indent=2)
         return _Response(content=payload, media_type="application/json",
                          headers=_headers({"subscription-userinfo": "upload=0; download=0; total=0; expire=0"}))
+
+    if fmt in ("clash", "clash-meta", "yaml"):
+        proxies = [_clash_proxy(u) for u in links]
+        proxies = [p for p in proxies if p]
+        names = [p["name"] for p in proxies]
+        payload = (
+            "port: 7890\nsocks-port: 7891\nallow-lan: false\nmode: rule\nlog-level: warning\n"
+            "proxies:\n"
+            + "\n".join("  - " + _clash_inline(p) for p in proxies)
+            + "\nproxy-groups:\n  - name: Voidz\n    type: select\n    proxies:\n"
+            + "".join(f"      - {_clash_quote(n)}\n" for n in names)
+            + "rules:\n  - MATCH,Voidz\n"
+        )
+        return _Response(content=payload, media_type="text/yaml", headers=_headers())
+
+    body = _b64.b64encode("\n".join(links).encode()).decode()
+    return _Response(content=body, media_type="text/plain", headers=_headers())
+
+
+@router.get("/sub/{sub_token}")
+async def plan_subscription(sub_token: str, request: Request):
+    """Multi-region subscription: one config per region in the customer's
+    plan, sharing one pooled quota/expiry enforced by services/quota.py.
+    Same UA-sniffing / ?fmt= negotiation as /i/{token}/sub."""
+    import base64 as _b64
+    from datetime import datetime, timezone
+
+    from ..services import workers as worker_svc
+    from ..services.workers import worker_url_for
+
+    fmt = (request.query_params.get("fmt") or "").strip().lower()
+    pool = get_pool(request)
+    cust = await pool.fetchrow(
+        "SELECT c.*, p.name AS plan_name FROM customers c JOIN plans p ON p.id = c.plan_id "
+        "WHERE c.sub_token = $1",
+        sub_token,
+    )
+    if cust is None or not cust["active"]:
+        return _page(
+            "Endpoint not found",
+            "This subscription doesn't exist or has been revoked. Contact "
+            "whoever gave you this link for a new one.",
+            status=404,
+        )
+    now = datetime.now(timezone.utc)
+    if cust["expires_at"] and cust["expires_at"] < now:
+        return _page("Subscription expired",
+                     "This subscription's time has run out. Contact whoever "
+                     "gave you this link to renew it.", status=403)
+    if cust["limit_bytes"] and cust["used_bytes_cached"] >= cust["limit_bytes"]:
+        return _page("Data limit reached",
+                     "This subscription has used all of its allotted data. "
+                     "Contact whoever gave you this link to top it up.", status=403)
+
+    pi_rows = await pool.fetch(
+        "SELECT pi.instance_id, pi.region_label, i.status, "
+        "(SELECT dep.node_id FROM deployments dep WHERE dep.instance_id = i.id "
+        " ORDER BY dep.started_at DESC LIMIT 1) AS node_id, "
+        "(SELECT d.domain FROM domains d WHERE d.instance_id = i.id "
+        " AND d.kind = 'path' AND d.is_active = TRUE ORDER BY d.created_at DESC LIMIT 1) AS endpoint_token "
+        "FROM plan_instances pi JOIN instances i ON i.id = pi.instance_id "
+        "WHERE pi.plan_id = $1 ORDER BY pi.position",
+        cust["plan_id"],
+    )
+    host = (request.query_params.get("host")
+            or (request.headers.get("x-forwarded-host") or "").split(",")[0].strip()
+            or request.headers.get("host") or "").split(":")[0]
+    if not host:
+        return _page("Missing host", "Append ?host=<your-domain> to this URL.", status=400)
+
+    configs = []
+    for pi in pi_rows:
+        if pi["status"] != "running" or not pi["endpoint_token"]:
+            continue
+        worker_url = worker_url_for(pi["node_id"] or "local")
+        try:
+            data = await worker_svc.worker_call(
+                worker_url, "POST",
+                f"/worker/api/instances/{pi['instance_id']}/proxy/core/api/share",
+                {"host": host, "path_prefix": f"/i/{pi['endpoint_token']}",
+                 "uuids": [cust["cred_uuid"]]},
+            )
+        except worker_svc.WorkerError:
+            continue
+        for c in data.get("links", []):
+            if c.get("share_url"):
+                c["region"] = pi["region_label"]
+                configs.append(c)
+
+    if not configs:
+        return _page("No locations available right now",
+                     "None of this subscription's locations are currently "
+                     "reachable. Try again shortly.", status=503)
+
+    links = [c["share_url"] for c in configs]
+    title = f"Voidz · {cust['name']}"
+
+    ua = (request.headers.get("user-agent") or "").lower()
+    accept = (request.headers.get("accept") or "").lower()
+    looks_like_browser = "mozilla" in ua and "text/html" in accept
+    if looks_like_browser and not fmt:
+        from fastapi.responses import HTMLResponse
+
+        return HTMLResponse(_sub_html_page(title, configs, host, f"/sub/{sub_token}"))
+
+    def _headers(extra: dict | None = None) -> dict:
+        expire_ts = int(cust["expires_at"].timestamp()) if cust["expires_at"] else 0
+        h = {
+            "profile-title": "base64:" + _b64.b64encode(title.encode()).decode(),
+            "subscription-userinfo": (
+                f"upload=0; download={int(cust['used_bytes_cached'])}; "
+                f"total={int(cust['limit_bytes'])}; expire={expire_ts}"
+            ),
+            "profile-update-interval": "6",
+            "profile-web-page-url": f"{request.url.scheme}://{request.headers.get('host', host)}",
+        }
+        if extra:
+            h.update(extra)
+        return h
+
+    from fastapi.responses import Response as _Response
+
+    if fmt in ("singbox", "sing-box", "sb"):
+        import json as _json
+
+        outbounds = [_singbox_outbound(u) for u in links]
+        payload = _json.dumps({"outbounds": outbounds}, ensure_ascii=False, indent=2)
+        return _Response(content=payload, media_type="application/json", headers=_headers())
 
     if fmt in ("clash", "clash-meta", "yaml"):
         proxies = [_clash_proxy(u) for u in links]

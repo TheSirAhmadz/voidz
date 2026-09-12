@@ -1,0 +1,224 @@
+"""Multi-region Plan/Customer provisioning and pooled-quota enforcement.
+
+A Plan groups several already-deployed Instances (typically one per
+region/worker). A Customer is a single credential (uuid, and an ss
+password/cipher when shadowsocks is included) provisioned as a Core Link
+on every instance in the plan.
+
+Each region's Core only knows its own local traffic — there is no way for
+one Core process to know what a customer used in another region's Core.
+So a customer's *pooled* quota (shared across every region in the plan) is
+enforced centrally, here: `reconcile_loop` periodically sums `used_bytes`
+for a customer's uuid across every regional Core and disables the link
+everywhere once the pool is exhausted or the plan has expired. Per-region
+Core links are always created with `limit_bytes=0` (locally unlimited) —
+the pool total is the only cap that matters.
+"""
+from __future__ import annotations
+
+import asyncio
+import secrets
+import uuid as uuid_mod
+from datetime import datetime, timedelta, timezone
+
+from ..logging import get
+from . import workers as worker_svc
+
+log = get("runtime", "voidz.console.quota")
+
+RECONCILE_INTERVAL = 60.0
+
+
+def _utcnow() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+async def _instance_worker(pool, instance_id: str) -> str | None:
+    """Worker URL for a running, endpoint-provisioned instance, else None."""
+    row = await pool.fetchrow(
+        "SELECT i.status, "
+        "(SELECT dep.node_id FROM deployments dep WHERE dep.instance_id = i.id "
+        " ORDER BY dep.started_at DESC LIMIT 1) AS node_id "
+        "FROM instances i WHERE i.id = $1",
+        instance_id,
+    )
+    if row is None or row["status"] != "running":
+        return None
+    return worker_svc.worker_url_for(row["node_id"] or "local")
+
+
+async def _plan_instances(pool, plan_id: str):
+    return await pool.fetch(
+        "SELECT instance_id, region_label FROM plan_instances WHERE plan_id = $1 ORDER BY position",
+        plan_id,
+    )
+
+
+async def create_customer(pool, plan, name: str, limit_gb: float, days: int | None,
+                          note: str = "") -> dict:
+    """Provision a new customer across every instance in the plan and
+    record it. Returns {id, sub_token, cred_uuid}."""
+    protocols = [p for p in (plan["protocols"] or "").split(",") if p]
+    cred_uuid = str(uuid_mod.uuid4())
+    ss_cipher = ss_password = None
+    if "shadowsocks" in protocols:
+        ss_cipher = "chacha20-ietf-poly1305"
+        ss_password = secrets.token_urlsafe(16)
+    limit_bytes = int(float(limit_gb) * (1024 ** 3)) if limit_gb else 0
+    expires_at = (_utcnow() + timedelta(days=int(days))) if days else None
+    cid = secrets.token_hex(16)
+    sub_token = secrets.token_urlsafe(24)
+    now = _utcnow()
+    await pool.execute(
+        "INSERT INTO customers (id, plan_id, name, sub_token, cred_uuid, ss_cipher, ss_password, "
+        "limit_bytes, used_bytes_cached, expires_at, active, note, created_at) "
+        "VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 0, $9, TRUE, $10, $11)",
+        cid, plan["id"], name, sub_token, cred_uuid, ss_cipher, ss_password,
+        limit_bytes, expires_at, note, now,
+    )
+    await provision_customer_links(pool, plan, {
+        "cred_uuid": cred_uuid, "name": name, "active": True,
+        "expires_at": expires_at.isoformat() if expires_at else None,
+        "ss_cipher": ss_cipher, "ss_password": ss_password,
+    })
+    return {"id": cid, "sub_token": sub_token, "cred_uuid": cred_uuid}
+
+
+async def provision_customer_links(pool, plan, customer: dict) -> None:
+    """Create (or refresh) a customer's Core link on every instance in the plan."""
+    protocols = [p for p in (plan["protocols"] or "").split(",") if p]
+    for pi in await _plan_instances(pool, plan["id"]):
+        worker_url = await _instance_worker(pool, pi["instance_id"])
+        if not worker_url:
+            log.warning("skip provisioning %s: instance %s not running",
+                       customer["name"], pi["instance_id"])
+            continue
+        for proto in protocols:
+            body = {
+                "uuid": customer["cred_uuid"],
+                "protocol": proto,
+                "label": f"{customer['name']} · {pi['region_label'] or 'region'}",
+                "active": bool(customer.get("active", True)),
+                "limit_bytes": 0,
+                "expires_at": customer.get("expires_at"),
+            }
+            if proto == "shadowsocks":
+                body["ss_cipher"] = customer.get("ss_cipher")
+                body["ss_password"] = customer.get("ss_password")
+            try:
+                await worker_svc.worker_call(
+                    worker_url, "POST",
+                    f"/worker/api/instances/{pi['instance_id']}/proxy/core/api/links",
+                    body,
+                )
+            except worker_svc.WorkerError as exc:
+                log.warning("provision failed for %s @ %s: %s",
+                           customer["name"], pi["region_label"], exc)
+
+
+async def set_customer_active(pool, plan_id: str, cred_uuid: str, active: bool) -> None:
+    for pi in await _plan_instances(pool, plan_id):
+        worker_url = await _instance_worker(pool, pi["instance_id"])
+        if not worker_url:
+            continue
+        try:
+            await worker_svc.worker_call(
+                worker_url, "PATCH",
+                f"/worker/api/instances/{pi['instance_id']}/proxy/core/api/links/{cred_uuid}",
+                {"active": active},
+            )
+        except worker_svc.WorkerError as exc:
+            log.warning("set_active(%s) failed on %s: %s", active, pi["instance_id"], exc)
+
+
+async def patch_customer_links(pool, plan_id: str, cred_uuid: str, patch: dict) -> None:
+    """Apply an arbitrary patch (expires_at, reset_usage, ...) to every region."""
+    for pi in await _plan_instances(pool, plan_id):
+        worker_url = await _instance_worker(pool, pi["instance_id"])
+        if not worker_url:
+            continue
+        try:
+            await worker_svc.worker_call(
+                worker_url, "PATCH",
+                f"/worker/api/instances/{pi['instance_id']}/proxy/core/api/links/{cred_uuid}",
+                patch,
+            )
+        except worker_svc.WorkerError as exc:
+            log.warning("patch failed on %s: %s", pi["instance_id"], exc)
+
+
+async def delete_customer_links(pool, plan_id: str, cred_uuid: str) -> None:
+    for pi in await _plan_instances(pool, plan_id):
+        worker_url = await _instance_worker(pool, pi["instance_id"])
+        if not worker_url:
+            continue
+        try:
+            await worker_svc.worker_call(
+                worker_url, "DELETE",
+                f"/worker/api/instances/{pi['instance_id']}/proxy/core/api/links/{cred_uuid}",
+            )
+        except worker_svc.WorkerError as exc:
+            log.warning("delete link failed on %s: %s", pi["instance_id"], exc)
+
+
+async def _sum_usage(pool, plan_id: str, cred_uuid: str) -> int:
+    total = 0
+    for pi in await _plan_instances(pool, plan_id):
+        worker_url = await _instance_worker(pool, pi["instance_id"])
+        if not worker_url:
+            continue
+        try:
+            data = await worker_svc.worker_call(
+                worker_url, "GET",
+                f"/worker/api/instances/{pi['instance_id']}/proxy/core/api/links",
+            )
+        except worker_svc.WorkerError:
+            continue
+        for link in data.get("links", []):
+            if link.get("uuid") == cred_uuid:
+                total += int(link.get("used_bytes") or 0)
+    return total
+
+
+async def reconcile_once(pool) -> None:
+    """One pass: refresh cached usage for every active customer, disable
+    anyone who is now over quota or past expiry. Never raises."""
+    rows = await pool.fetch(
+        "SELECT id, plan_id, cred_uuid, name, limit_bytes, expires_at FROM customers "
+        "WHERE active = TRUE"
+    )
+    now = _utcnow()
+    for c in rows:
+        try:
+            used = await _sum_usage(pool, c["plan_id"], c["cred_uuid"])
+        except Exception as exc:
+            log.warning("usage sync failed for customer %s: %s", c["id"], exc)
+            continue
+        await pool.execute(
+            "UPDATE customers SET used_bytes_cached = $2, last_synced_at = $3 WHERE id = $1",
+            c["id"], used, now,
+        )
+        expired = c["expires_at"] is not None and c["expires_at"] < now
+        over_quota = bool(c["limit_bytes"]) and used >= c["limit_bytes"]
+        if expired or over_quota:
+            await pool.execute("UPDATE customers SET active = FALSE WHERE id = $1", c["id"])
+            await set_customer_active(pool, c["plan_id"], c["cred_uuid"], False)
+            log.info("customer %s (%s) disabled: %s", c["name"], c["id"],
+                     "expired" if expired else "over quota")
+
+
+async def reconcile_loop() -> None:
+    """Background task: re-sync usage / enforce pooled quotas every tick.
+    Started from the app lifespan; runs until cancelled on shutdown."""
+    from ..db import get_pool
+
+    while True:
+        await asyncio.sleep(RECONCILE_INTERVAL)
+        try:
+            pool = get_pool(None)
+        except RuntimeError:
+            continue  # DB not ready yet on the very first tick
+        try:
+            await reconcile_once(pool)
+        except Exception as exc:  # a bad tick must never kill the loop
+            log.warning("reconcile tick failed: %s", exc)

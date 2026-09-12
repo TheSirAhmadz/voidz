@@ -181,4 +181,44 @@ MIGRATIONS: list[tuple[str, str]] = [
         ALTER TABLE users ALTER COLUMN github_id DROP NOT NULL;
         """,
     ),
+    (
+        "0007_plans_customers",
+        """
+        CREATE TABLE IF NOT EXISTS plans (
+            id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            user_id     UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            name        TEXT NOT NULL,
+            protocols   TEXT NOT NULL DEFAULT 'vless-ws',
+            created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+        );
+        CREATE INDEX IF NOT EXISTS idx_plans_user ON plans(user_id);
+
+        CREATE TABLE IF NOT EXISTS plan_instances (
+            id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            plan_id      UUID NOT NULL REFERENCES plans(id) ON DELETE CASCADE,
+            instance_id  UUID NOT NULL REFERENCES instances(id) ON DELETE CASCADE,
+            region_label TEXT NOT NULL DEFAULT '',
+            position     INT NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_plan_instances_plan ON plan_instances(plan_id);
+
+        CREATE TABLE IF NOT EXISTS customers (
+            id               UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            plan_id          UUID NOT NULL REFERENCES plans(id) ON DELETE CASCADE,
+            name             TEXT NOT NULL,
+            sub_token        TEXT UNIQUE NOT NULL,
+            cred_uuid        TEXT NOT NULL,
+            ss_cipher        TEXT,
+            ss_password      TEXT,
+            limit_bytes      BIGINT NOT NULL DEFAULT 0,
+            used_bytes_cached BIGINT NOT NULL DEFAULT 0,
+            expires_at       TIMESTAMPTZ,
+            active           BOOLEAN NOT NULL DEFAULT TRUE,
+            note             TEXT NOT NULL DEFAULT '',
+            created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+            last_synced_at   TIMESTAMPTZ
+        );
+        CREATE INDEX IF NOT EXISTS idx_customers_plan ON customers(plan_id);
+        """,
+    ),
 ]

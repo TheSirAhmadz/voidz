@@ -20,12 +20,13 @@ import asyncio
 import json
 import os
 import shutil
-import signal
 import socket
 import subprocess
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
+
+import psutil
 
 from .logging import get
 
@@ -260,6 +261,8 @@ class ProcessDriver(BaseDriver):
         self.core_cwd = os.environ.get("VOIDZ_CORE_CWD", "")
 
     def _limits(self, spec: LaunchSpec):
+        if os.name == "nt":
+            return None  # rlimits are POSIX-only; Windows dev runs unconfined
         import resource
 
         def apply() -> None:  # runs in the child before exec
@@ -294,11 +297,15 @@ class ProcessDriver(BaseDriver):
 
         out_path = data_dir / "core.log"
         out_fh = out_path.open("ab", buffering=0)
+        extra: dict = {}
+        if os.name != "nt":
+            extra["preexec_fn"] = self._limits(spec)
+            extra["start_new_session"] = True
         proc = await asyncio.create_subprocess_exec(
             *self.core_cmd, "--port", str(port),
             stdout=out_fh, stderr=subprocess.STDOUT,
-            env=env, preexec_fn=self._limits(spec), start_new_session=True,
-            cwd=self.core_cwd or None,
+            env=env, cwd=self.core_cwd or None,
+            **extra,
         )
         handle = InstanceHandle(
             instance_id=spec.instance_id, driver="process", reference=str(proc.pid), port=port,
@@ -314,17 +321,21 @@ class ProcessDriver(BaseDriver):
         if not handle:
             raise DriverError("instance not known to worker")
         pid = int(handle.reference)
+        # psutil.terminate()/kill() are cross-platform (SIGTERM/SIGKILL on
+        # POSIX, TerminateProcess on Windows) — the process group semantics
+        # of the old os.killpg() call don't exist on Windows at all.
         try:
-            os.killpg(pid, signal.SIGTERM)
-        except ProcessLookupError:
+            proc = psutil.Process(pid)
+            proc.terminate()
+        except psutil.NoSuchProcess:
             return
         for _ in range(timeout * 10):
             await asyncio.sleep(0.1)
             if not self._pid_alive(pid):
                 return
         try:
-            os.killpg(pid, signal.SIGKILL)
-        except ProcessLookupError:
+            psutil.Process(pid).kill()
+        except psutil.NoSuchProcess:
             pass
 
     async def remove(self, instance_id: str, timeout: int = 10) -> None:
@@ -342,11 +353,7 @@ class ProcessDriver(BaseDriver):
 
     @staticmethod
     def _pid_alive(pid: int) -> bool:
-        try:
-            os.kill(pid, 0)
-            return True
-        except ProcessLookupError:
-            return False
+        return psutil.pid_exists(pid)
 
     async def status(self, instance_id: str) -> dict:
         handle = self.handles.get(instance_id)

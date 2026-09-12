@@ -204,6 +204,7 @@ function api(method,path,body,retry){
 // ───────────────────────────── icons ─────────────────────────────
 function ic(n){var p={dash:'<path d="M3 3h7v7H3zM14 3h7v7h-7zM3 14h7v7H3zM14 14h7v7h-7z"/>',
 plus:'<path d="M12 5v14M5 12h14"/>',gear:'<path d="M12 3l8 4v5c0 5-3.5 8-8 9-4.5-1-8-4-8-9V7z"/>',
+layers:'<path d="M12 3 2 8l10 5 10-5-10-5Z"/><path d="M2 13l10 5 10-5"/><path d="M2 18l10 5 10-5"/>',
 gh:'<path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z" fill="currentColor" stroke="none"/>',
 tg:'<path d="M21.9 4.6 18.9 19c-.2 1-.8 1.2-1.7.8l-4.6-3.4-2.2 2.1c-.3.3-.5.5-1 .5l.4-4.7L18.6 6c.4-.3-.1-.5-.6-.2L7.3 12.4l-4.3-1.4c-.9-.3-.9-.9.2-1.3L20.7 3.3c.8-.3 1.5.2 1.2 1.3Z" fill="currentColor" stroke="none"/>'};
 return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" style="width:15px;height:15px">'+p[n]+"</svg>"}
@@ -227,6 +228,7 @@ function shell(nav){
     '<div class="ct" id="view"></div>'+
     '<nav class="bnav"><div class="bnav-in"><button class="ni '+(nav==="dash"?"act":"")+'" data-nav="dash">'+ic("dash")+'<span>Home</span></button>'+
     '<button class="ni '+(nav==="new"?"act":"")+'" data-nav="new">'+ic("plus")+'<span>Create</span></button>'+
+    '<button class="ni '+(nav==="plans"?"act":"")+'" data-nav="plans">'+ic("layers")+'<span>Plans</span></button>'+
     (USER.is_admin?'<button class="ni '+(nav==="admin"?"act":"")+'" data-nav="admin">'+ic("gear")+'<span>Admin</span></button>':"")+
     '</div></nav></div>';
   var lgm=$("#lgm");if(lgm)lgm.onclick=logout;
@@ -235,7 +237,7 @@ function shell(nav){
     b.onclick=function(){SND.nav();nav_(b.dataset.nav)}});
 }
 function nav_(name){stopPoll();setCleanup(null);
-  if(name==="dash")viewDash();else if(name==="new")viewWizard();else if(name==="admin")viewAdmin()}
+  if(name==="dash")viewDash();else if(name==="new")viewWizard();else if(name==="admin")viewAdmin();else if(name==="plans")viewPlans()}
 function logout(){SND.click();api("POST","/auth/logout").then(function(){render()})}
 // ───────────────────────────── login ─────────────────────────────
 function viewLogin(){
@@ -566,6 +568,204 @@ function viewAdmin(){
   }
   stats();rebuild();
 }
+// ───────────────────────────── plans & customers ─────────────────────────────
+function fmtGB(bytes){return (bytes/(1024*1024*1024)).toFixed(bytes && bytes<1073741824?3:1)}
+function fmtExpiry(iso){if(!iso)return"never";var d=new Date(iso);var days=Math.ceil((d-new Date())/864e5);
+  if(days<0)return"expired";if(days===0)return"today";return days+"d left"}
+
+function viewPlans(){
+  shell("plans");
+  var v=$("#view");
+  v.innerHTML='<div class="ph"><div><h1>Plans</h1><div class="sub">Multi-region bundles you sell as customer subscriptions.</div></div>'+
+    '<div class="ha"><button class="btn pri" id="p-new">+ Create Plan</button></div></div>'+
+    '<div id="p-list"><span class="sp1"></span></div>';
+  $("#p-new").onclick=function(){SND.click();viewPlanCreate()};
+  api("GET","/api/plans").then(function(d){
+    var list=$("#p-list");
+    if(!d.plans.length){
+      list.innerHTML='<div class="empty"><b>No plans yet</b>Group a few running instances — one per region — into a plan, then sell subscriptions under it.<div style="margin-top:14px"><button class="btn pri" id="p-new2">Create your first plan</button></div></div>';
+      $("#p-new2").onclick=function(){viewPlanCreate()};
+    }else{
+      list.innerHTML='<div class="ig">'+d.plans.map(function(p){
+        return '<div class="ic" data-id="'+p.id+'"><div class="t"><span class="nm">'+esc(p.name)+'</span><span class="chip">'+esc(p.protocols.join(", "))+'</span></div>'+
+          '<div class="mt"><span>'+p.instance_count+' region'+(p.instance_count===1?"":"s")+'</span><span>'+p.customer_count+' active customer'+(p.customer_count===1?"":"s")+'</span></div></div>';
+      }).join("")+"</div>";
+      Array.prototype.forEach.call(list.querySelectorAll("[data-id]"),function(card){
+        card.onclick=function(){viewPlanDetail(card.dataset.id)}});
+    }
+  }).catch(function(e){$("#p-list").innerHTML='<p class="ftx">'+esc(e.message)+"</p>"});
+}
+
+var PLAN_PROTOS=[["vless-ws","VLESS"],["trojan-ws","Trojan"],["shadowsocks","Shadowsocks"],["xhttp-packet-up","xHTTP"]];
+
+function viewPlanCreate(){
+  shell("plans");
+  var v=$("#view");
+  v.innerHTML='<div class="ph"><div><h1>Create Plan</h1><div class="sub">Pick the running instances to bundle — normally one per region.</div></div></div>'+
+    '<div id="pc-body"><span class="sp1"></span></div>';
+  var sel={};sel[PLAN_PROTOS[0][0]]=true;
+  api("GET","/api/instances").then(function(d){
+    var running=(d.instances||[]).filter(function(i){return i.status==="running"});
+    var body=$("#pc-body");
+    body.innerHTML='<div class="card">'+
+      '<div class="fld"><label>Plan name</label><input class="inp" id="pc-name" placeholder="e.g. Family 4-location plan"></div>'+
+      '<div class="fld"><label>Protocols sold under this plan</label><div class="optg">'+
+        PLAN_PROTOS.map(function(p){return '<div class="opt '+(sel[p[0]]?"sel":"")+'" data-p="'+p[0]+'"><div class="t">'+p[1]+"</div></div>"}).join("")+
+      "</div></div>"+
+      '<div class="fld"><label>Instances to bundle</label>'+
+      (running.length?running.map(function(i){
+        return '<div class="row" style="justify-content:space-between;padding:8px 0;border-bottom:1px solid var(--bd)">'+
+          '<label class="row" style="gap:8px;cursor:pointer"><input type="checkbox" data-inst="'+i.id+'"><b>'+esc(i.name)+'</b><span class="ftx mono">'+esc(i.region)+"</span></label>"+
+          '<input class="inp" style="width:170px" placeholder="Region label" data-label-for="'+i.id+'" value="'+esc(i.region)+'">'+
+          "</div>";
+      }).join(""):'<p class="ftx">No running instances yet — deploy at least one instance first (Create Instance), then come back here.</p>')+
+      "</div>"+
+      '<div class="row" style="margin-top:16px"><button class="btn" id="pc-back">Back</button><div class="grow"></div><button class="btn pri" id="pc-go">Create plan</button></div>'+
+      "</div>";
+    Array.prototype.forEach.call(body.querySelectorAll(".opt[data-p]"),function(o){
+      o.onclick=function(){SND.toggle();var p=o.dataset.p;
+        if(sel[p]){if(Object.keys(sel).length>1){delete sel[p];o.classList.remove("sel")}}
+        else{sel[p]=true;o.classList.add("sel")}}});
+    $("#pc-back").onclick=function(){SND.click();viewPlans()};
+    $("#pc-go").onclick=function(){
+      SND.click();
+      var name=$("#pc-name").value.trim();
+      if(name.length<2){toast("Give the plan a name (2+ chars)","err");return}
+      var ids=[];var labels={};
+      Array.prototype.forEach.call(body.querySelectorAll("[data-inst]"),function(cb){
+        if(cb.checked){ids.push(cb.dataset.inst);
+          var li=body.querySelector('[data-label-for="'+cb.dataset.inst+'"]');
+          labels[cb.dataset.inst]=(li&&li.value.trim())||"";}});
+      if(!ids.length){toast("Pick at least one instance","err");return}
+      $("#pc-go").disabled=true;
+      api("POST","/api/plans",{name:name,protocols:Object.keys(sel),instance_ids:ids,region_labels:labels})
+        .then(function(plan){toast("Plan created","ok");viewPlanDetail(plan.id)})
+        .catch(function(e){$("#pc-go").disabled=false;toast(e.message,"err",6000)});
+    };
+  }).catch(function(e){$("#pc-body").innerHTML='<p class="ftx">'+esc(e.message)+"</p>"});
+}
+
+function viewPlanDetail(planId){
+  shell("plans");
+  var v=$("#view");
+  v.innerHTML='<div id="pd-body"><span class="sp1"></span></div>';
+  function load(){
+    return api("GET","/api/plans/"+planId).then(draw);
+  }
+  function draw(plan){
+    var body=$("#pd-body");
+    body.innerHTML='<div class="ph"><div><h1>'+esc(plan.name)+'</h1><div class="sub">'+esc(plan.protocols.join(", "))+" · "+plan.instances.length+" region"+(plan.instances.length===1?"":"s")+"</div></div>"+
+      '<div class="ha"><button class="btn" id="pd-addcust">+ Add customer</button><button class="btn dng" id="pd-del">Delete plan</button></div></div>'+
+      '<div class="card"><h3>Regions</h3><table class="tbl"><thead><tr><th>Region</th><th>Instance</th><th>Status</th></tr></thead><tbody>'+
+      plan.instances.map(function(i){return "<tr><td><b>"+esc(i.region_label)+"</b></td><td>"+esc(i.instance_name)+"</td><td>"+stEl(i.status).outerHTML+"</td></tr>"}).join("")+
+      "</tbody></table></div>"+
+      '<div class="card" style="margin-top:14px" id="pd-newcust" hidden>'+
+      '<h3>New customer</h3>'+
+      '<div class="row"><div class="fld" style="width:200px;margin:0"><label>Name</label><input class="inp" id="nc-name" placeholder="e.g. Sister"></div>'+
+      '<div class="fld" style="width:140px;margin:0"><label>Quota (GB, 0 = unlimited)</label><input class="inp" id="nc-gb" type="number" min="0" step="0.5" value="50"></div>'+
+      '<div class="fld" style="width:140px;margin:0"><label>Duration (days, blank = never)</label><input class="inp" id="nc-days" type="number" min="1" value="30"></div></div>'+
+      '<div class="fld"><label>Note (optional)</label><input class="inp" id="nc-note" placeholder="e.g. paid via bank transfer 12/09"></div>'+
+      '<button class="btn pri" id="nc-go">Create customer</button>'+
+      '</div>'+
+      '<div class="card section-gap" style="margin-top:14px"><h3>Customers</h3><div id="pd-custs"></div></div>';
+    $("#pd-del").onclick=function(){
+      if(!confirm('Delete plan "'+plan.name+'"? This revokes every customer under it.'))return;
+      api("DELETE","/api/plans/"+planId).then(function(){toast("Plan deleted","ok");viewPlans()}).catch(function(e){toast(e.message,"err")});
+    };
+    $("#pd-addcust").onclick=function(){SND.click();var f=$("#pd-newcust");f.hidden=!f.hidden};
+    $("#nc-go").onclick=function(){
+      SND.click();
+      var name=$("#nc-name").value.trim();
+      if(!name){toast("Give the customer a name","err");return}
+      var gb=parseFloat($("#nc-gb").value||"0");
+      var daysRaw=$("#nc-days").value.trim();
+      var days=daysRaw?parseInt(daysRaw,10):null;
+      $("#nc-go").disabled=true;
+      api("POST","/api/plans/"+planId+"/customers",{name:name,limit_gb:gb,days:days,note:$("#nc-note").value.trim()})
+        .then(function(cust){
+          toast("Customer created","ok");
+          $("#pd-newcust").hidden=true;
+          showSubResult(cust);
+          return load();
+        }).catch(function(e){$("#nc-go").disabled=false;toast(e.message,"err",6000)});
+    };
+    drawCustomers(plan);
+  }
+  function showSubResult(cust){
+    var ov=document.createElement("div");ov.className="qr-ov";
+    ov.innerHTML='<div class="qr-c" style="max-width:400px;text-align:left">'+
+      '<b style="font-size:14px">'+esc(cust.name)+" — subscription ready</b>"+
+      '<div class="mono" style="margin:10px 0;background:var(--bg2);border:1px solid var(--bd);border-radius:8px;padding:8px 10px;word-break:break-all">'+esc(cust.sub_url)+"</div>"+
+      '<div class="row"><button class="btn sm pri" id="sr-copy">Copy link</button><button class="btn sm" id="sr-qr">Show QR</button><button class="btn sm" id="sr-close" style="margin-left:auto">Done</button></div>'+
+      '<div class="qrbox" style="margin-top:12px;display:none"></div>'+
+      "</div>";
+    document.body.appendChild(ov);
+    ov.onclick=function(e){if(e.target===ov)ov.remove()};
+    $("#sr-close",ov).onclick=function(){ov.remove()};
+    $("#sr-copy",ov).onclick=function(){navigator.clipboard&&navigator.clipboard.writeText(cust.sub_url).then(function(){toast("Copied","ok",1500)})};
+    $("#sr-qr",ov).onclick=function(){
+      var box=ov.querySelector(".qrbox");box.style.display="block";box.innerHTML='<span class="sp1"></span>';
+      var firstInst=plan_cache_instance_id;
+      api("POST","/api/instances/"+firstInst+"/qr",{text:cust.sub_url}).then(function(svg){box.innerHTML=svg}).catch(function(e){box.innerHTML='<span class="ftx">'+esc(e.message)+"</span>"});
+    };
+  }
+  var plan_cache_instance_id=null;
+  function drawCustomers(plan){
+    plan_cache_instance_id=plan.instances.length?plan.instances[0].instance_id:null;
+    var host=$("#pd-custs");
+    if(!plan.customers.length){
+      host.innerHTML='<p class="ftx">No customers yet — add one above and hand them the subscription link.</p>';return;
+    }
+    host.innerHTML='<table class="tbl"><thead><tr><th>Name</th><th>Usage</th><th>Expires</th><th>Status</th><th></th></tr></thead><tbody>'+
+      plan.customers.map(function(c){
+        var pct=c.limit_bytes?Math.min(100,100*c.used_bytes_cached/c.limit_bytes):0;
+        var usage=c.limit_bytes?fmtGB(c.used_bytes_cached)+" / "+fmtGB(c.limit_bytes)+" GB":fmtGB(c.used_bytes_cached)+" GB / ∞";
+        var status=!c.active?'<span class="st fail"><span class="d"></span>Disabled</span>':'<span class="st run"><span class="d"></span>Active</span>';
+        return "<tr data-cid=\""+c.id+"\"><td><b>"+esc(c.name)+"</b>"+(c.note?'<div class="ftx" style="font-size:11px">'+esc(c.note)+"</div>":"")+"</td>"+
+          '<td><div style="width:110px">'+usage+'<div class="meter" style="margin-top:4px"><div class="'+(pct>90?"crit":pct>70?"warn":"")+'" style="width:'+pct+'%"></div></div></div></td>'+
+          "<td>"+fmtExpiry(c.expires_at)+"</td><td>"+status+"</td>"+
+          '<td><div class="row" style="gap:4px;flex-wrap:nowrap">'+
+          '<button class="btn sm" data-act="copy">Copy link</button>'+
+          '<button class="btn sm" data-act="extend">+30d</button>'+
+          '<button class="btn sm" data-act="reset">Reset</button>'+
+          '<button class="btn sm" data-act="toggle">'+(c.active?"Disable":"Enable")+"</button>"+
+          '<button class="btn sm dng" data-act="del">Revoke</button>'+
+          "</div></td></tr>";
+      }).join("")+"</tbody></table>";
+    Array.prototype.forEach.call(host.querySelectorAll("[data-act]"),function(btn){
+      var tr=btn.closest("tr");var cid=tr.dataset.cid;
+      var cust=plan.customers.filter(function(c){return c.id===cid})[0];
+      btn.onclick=function(){
+        SND.click();
+        var act=btn.dataset.act;
+        if(act==="copy"){
+          var origin=location.origin;
+          navigator.clipboard&&navigator.clipboard.writeText(origin+"/sub/"+cust.sub_token).then(function(){toast("Copied","ok",1500)});
+          return;
+        }
+        if(act==="extend"){
+          api("PATCH","/api/plans/"+planId+"/customers/"+cid,{extend_days:30}).then(function(){toast("Extended 30 days","ok");load()}).catch(function(e){toast(e.message,"err")});
+          return;
+        }
+        if(act==="reset"){
+          if(!confirm("Reset usage back to zero for "+cust.name+"?"))return;
+          api("PATCH","/api/plans/"+planId+"/customers/"+cid,{reset_usage:true}).then(function(){toast("Usage reset","ok");load()}).catch(function(e){toast(e.message,"err")});
+          return;
+        }
+        if(act==="toggle"){
+          api("PATCH","/api/plans/"+planId+"/customers/"+cid,{active:!cust.active}).then(function(){toast(cust.active?"Disabled":"Enabled","ok");load()}).catch(function(e){toast(e.message,"err")});
+          return;
+        }
+        if(act==="del"){
+          if(!confirm('Revoke "'+cust.name+'"’s subscription? This deletes their credential in every region.'))return;
+          api("DELETE","/api/plans/"+planId+"/customers/"+cid).then(function(){toast("Revoked","ok");load()}).catch(function(e){toast(e.message,"err")});
+        }
+      };
+    });
+  }
+  load().catch(function(e){$("#pd-body").innerHTML='<p class="ftx">'+esc(e.message)+"</p>"});
+}
+
 // ───────────────────────────── boot ─────────────────────────────
 function render(){
   api("GET","/auth/me").then(function(me){

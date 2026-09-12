@@ -7,6 +7,7 @@ Serves:
 """
 from __future__ import annotations
 
+import asyncio
 import contextlib
 from pathlib import Path
 
@@ -18,8 +19,9 @@ from . import version
 from .db import close_db, init_pool
 from .logging import get, setup_logging
 from .panel import router as panel_router
-from .routers import admin, auth, domains, instances, internal
+from .routers import admin, auth, domains, instances, internal, plans
 from .security.ratelimit import RULES, client_ip, limiter
+from .services import quota as quota_svc
 from .services.gateway import router as gateway_router
 
 setup_logging()
@@ -36,6 +38,7 @@ app.include_router(instances.router)
 app.include_router(domains.router)
 app.include_router(admin.router)
 app.include_router(internal.router)
+app.include_router(plans.router)
 app.include_router(gateway_router)
 
 
@@ -78,7 +81,11 @@ async def spa_fallback(request, exc):
 async def lifespan(_app):
     await init_pool()
     log.info("Voidz Console %s started", version.version())
+    quota_task = asyncio.create_task(quota_svc.reconcile_loop())
     yield
+    quota_task.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await quota_task
     await close_db()
     log.info("Voidz Console stopped")
 

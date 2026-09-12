@@ -392,6 +392,39 @@ CREATE TABLE IF NOT EXISTS oauth_states (
     redirect TEXT,
     created_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS plans (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    name TEXT NOT NULL,
+    protocols TEXT NOT NULL DEFAULT 'vless-ws',
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_plans_user ON plans(user_id);
+CREATE TABLE IF NOT EXISTS plan_instances (
+    id TEXT PRIMARY KEY,
+    plan_id TEXT NOT NULL,
+    instance_id TEXT NOT NULL,
+    region_label TEXT NOT NULL DEFAULT '',
+    position INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_plan_instances_plan ON plan_instances(plan_id);
+CREATE TABLE IF NOT EXISTS customers (
+    id TEXT PRIMARY KEY,
+    plan_id TEXT NOT NULL,
+    name TEXT NOT NULL,
+    sub_token TEXT UNIQUE NOT NULL,
+    cred_uuid TEXT NOT NULL,
+    ss_cipher TEXT,
+    ss_password TEXT,
+    limit_bytes INTEGER NOT NULL DEFAULT 0,
+    used_bytes_cached INTEGER NOT NULL DEFAULT 0,
+    expires_at TEXT,
+    active INTEGER NOT NULL DEFAULT 1,
+    note TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    last_synced_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_customers_plan ON customers(plan_id);
 """
 
 POSTGRES_MIGRATIONS = None  # imported lazily below to reuse the SQL list
