@@ -545,12 +545,16 @@ function viewAdmin(){
         '<div class="card" style="max-width:540px;margin-top:14px"><h3>System</h3><table class="tbl">'+
         '<tr><td style="color:var(--fnt);width:45%">Database</td><td>'+(rs[0].database.ok?"PostgreSQL/SQLite OK":"down")+"</td></tr>"+
         '<tr><td style="color:var(--fnt)">GitHub OAuth</td><td>'+(rs[0].github_oauth?"configured":"not configured (password login)")+"</td></tr>"+
-        '<tr><td style="color:var(--fnt)">Railway provider</td><td>'+(rs[0].provider.railway?"configured":"not configured")+"</td></tr></table></div>";
+        '<tr><td style="color:var(--fnt)">Railway provider</td><td>'+(rs[0].provider.railway?"configured":"not configured")+"</td></tr></table></div>"+
+        '<div class="card" style="max-width:540px;margin-top:14px"><h3>Backup</h3>'+
+        '<p class="fn">Downloads a full point-in-time snapshot of the database — users, instances, plans, customers, everything.</p>'+
+        '<button class="btn pri" id="bkb">Download backup</button></div>';
         $("#cpb").onclick=function(){
           api("POST","/auth/change-password",{current_password:$("#cp").value,new_password:$("#np").value})
           .then(function(){toast("Password updated","ok");$("#cp").value="";$("#np").value=""})
           .catch(function(e){toast(e.message,"err")});
         };
+        $("#bkb").onclick=function(){window.location.href="/api/admin/backup"};
       });
     }
   }

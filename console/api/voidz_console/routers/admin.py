@@ -6,8 +6,15 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
+import asyncio
+import os
+import sqlite3
+import tempfile
+
 import asyncpg
 from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi.responses import FileResponse
+from starlette.background import BackgroundTask
 
 from ..auth import sessions
 from ..config import settings
@@ -205,6 +212,50 @@ async def recent_deployments(request: Request, _=Depends(admin_user)):
         item["started_at"] = item["started_at"].isoformat()
         out.append(item)
     return {"deployments": out}
+
+
+def _snapshot_sqlite(src_path: str, dst_path: str) -> None:
+    """Consistent point-in-time copy via SQLite's own backup API — safe to
+    run against the live WAL-mode connection the app already has open."""
+    src = sqlite3.connect(src_path)
+    try:
+        dst = sqlite3.connect(dst_path)
+        try:
+            src.backup(dst)
+        finally:
+            dst.close()
+    finally:
+        src.close()
+
+
+@router.get("/backup")
+async def download_backup(request: Request, admin: asyncpg.Record = Depends(admin_user)):
+    """Full database backup: a consistent snapshot of the SQLite file (users,
+    instances, plans, customers — everything). Postgres deployments should
+    rely on the platform's own managed backups instead."""
+    from ..db import db as _db
+
+    if getattr(_db, "mode", None) != "sqlite":
+        raise HTTPException(status_code=501, detail="backup endpoint only supports the sqlite backend")
+
+    ts = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+    fd, tmp_path = tempfile.mkstemp(suffix=".db", prefix="voidz-backup-")
+    os.close(fd)
+    await asyncio.to_thread(_snapshot_sqlite, _db._path, tmp_path)
+
+    pool = get_pool(request)
+    await pool.execute(
+        "INSERT INTO activity_events (user_id, instance_id, kind, level, message, created_at) "
+        "VALUES ($1, NULL, 'admin', 'info', $2, $3)",
+        admin["id"], f"Admin '{admin['login']}' downloaded a full database backup",
+        datetime.now(timezone.utc),
+    )
+    return FileResponse(
+        tmp_path,
+        filename=f"voidz-backup-{ts}.db",
+        media_type="application/octet-stream",
+        background=BackgroundTask(lambda: os.unlink(tmp_path)),
+    )
 
 
 @router.get("/system")
