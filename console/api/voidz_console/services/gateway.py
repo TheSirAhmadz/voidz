@@ -232,8 +232,8 @@ async def instance_status_page(token: str, request: Request):
         )
     return _page(
         "This endpoint is live",
-        "This address is the private transport path for your proxy client — "
-        "there is no web page here. Open the Voidz panel, choose your "
+        "This address is the private transport path for your proxy client. "
+        "There is no web page here. Open the Voidz panel, choose your "
         "instance, open the <b>Config</b> tab and copy the "
         "<code>vless://</code> link into your client (v2rayNG, NekoBox, "
         "Streisand, …).",
@@ -605,7 +605,7 @@ async def instance_http_gateway(token: str, path: str, request: Request):
         return _page(
             "Endpoint not found",
             "This endpoint doesn't exist or its instance is not running. "
-            "Check the panel — if the instance is Running, copy the fresh "
+            "Check the panel: if the instance is Running, copy the fresh "
             "config from its <b>Config</b> tab.",
             status=404,
         )

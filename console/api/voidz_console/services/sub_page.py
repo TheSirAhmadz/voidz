@@ -169,7 +169,7 @@ _SUB_CSS = r"""
 .pass>*{position:relative;z-index:3}
 .pass-head{display:flex;align-items:flex-start;justify-content:space-between;gap:16px}
 .pass-id{min-width:0}
-.pass-name{margin:-1px 0 0;font-size:30px;line-height:1.08;font-weight:680;letter-spacing:-.032em;overflow-wrap:anywhere;
+.pass-name{margin:2px 0 0;padding-bottom:.14em;font-size:30px;line-height:1.3;font-weight:680;letter-spacing:-.032em;overflow-wrap:anywhere;
   background:linear-gradient(180deg,#fff 35%,#c3cbd7);-webkit-background-clip:text;background-clip:text;color:transparent}
 .pass-sub{display:flex;flex-wrap:wrap;align-items:center;gap:4px 10px;margin-top:9px;color:var(--fg-2);font-size:13px}
 .pass-sub .sep{width:3px;height:3px;border-radius:50%;background:var(--fg-4)}
@@ -467,7 +467,7 @@ _SUB_JS = r"""
   };
   const copyWith = async (btn, text, msg) => {
     if (await copyText(text)) { markDone(btn); if (msg) toast(msg, true); }
-    else toast('Couldn’t copy — press and hold to copy manually', false);
+    else toast('Couldn’t copy. Press and hold to copy manually', false);
   };
 
   /* format switch */
@@ -567,7 +567,7 @@ _SUB_JS = r"""
       if (mine !== qrToken) return;
       slot.classList.remove('is-loading');
       slot.classList.add('is-error');
-      slot.textContent = 'QR code unavailable — copy the link instead.';
+      slot.textContent = 'QR code unavailable. Copy the link instead.';
     });
   };
   const openSheet = (title, sub, text) => {
@@ -859,7 +859,7 @@ def render_subscription_page(*, title: str, configs: list, host: str, sub_path: 
     # import panel
     base = f"https://{host}{sub_path}"
     formats = [
-        ("v2ray", "v2ray", base, "", "Base64 list — works with v2rayNG, v2rayN, Hiddify, Streisand and NekoBox."),
+        ("v2ray", "v2ray", base, "", "Base64 list. Works with v2rayNG, v2rayN, Hiddify, Streisand and NekoBox."),
         ("singbox", "sing-box", f"{base}?fmt=singbox&host={host}", "?fmt=singbox", "JSON outbounds for sing-box based clients."),
         ("clash", "Clash Meta", f"{base}?fmt=clash&host={host}", "?fmt=clash", "YAML profile for Clash Meta (mihomo) clients."),
     ]
@@ -973,7 +973,7 @@ def render_subscription_page(*, title: str, configs: list, host: str, sub_path: 
   </section>
 
   <footer class="foot reveal" style="--i:4">
-    <span class="foot-note">{icon("shield")}Keep this link private &mdash; anyone with it can use this plan.</span>
+    <span class="foot-note">{icon("shield")}Keep this link private. Anyone with it can use this plan.</span>
     <span>Powered by Voidz</span>
   </footer>
 </main>
