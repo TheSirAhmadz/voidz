@@ -146,11 +146,17 @@ async def provision_customer_links(pool, plan, customer: dict) -> None:
                            customer["name"], pi["region_label"], exc)
 
 
-async def set_customer_active(pool, plan_id: str, cred_uuid: str, active: bool) -> None:
+async def set_customer_active(pool, plan_id: str, cred_uuid: str, active: bool) -> bool:
+    """Push active/inactive to every region. Returns True only if every
+    region in the plan actually got the update — callers that must not
+    leave a stale, still-enabled link behind (see `_pending_disable` below)
+    check this instead of assuming a fire-and-forget push landed everywhere."""
     protocols = await _plan_protocols(pool, plan_id)
+    ok = True
     for pi in await _plan_instances(pool, plan_id):
         worker_url = await _instance_worker(pool, pi["instance_id"])
         if not worker_url:
+            ok = False
             continue
         for proto in protocols:
             try:
@@ -161,6 +167,8 @@ async def set_customer_active(pool, plan_id: str, cred_uuid: str, active: bool) 
                 )
             except worker_svc.WorkerError as exc:
                 log.warning("set_active(%s) failed on %s/%s: %s", active, pi["instance_id"], proto, exc)
+                ok = False
+    return ok
 
 
 async def _push_allowed_ips(pool, instance_id: str, cred_uuid: str, protocols: list[str],
@@ -336,6 +344,13 @@ async def enforce_device_limits(pool) -> None:
             del _device_allowed_ips[key]
 
 
+def forget_pending_disable(customer_id: str) -> None:
+    """Drop a customer from the disable-retry set — call this whenever an
+    admin explicitly re-enables them, so a stale retry from a past
+    expiry/over-quota disable can't undo that re-enable on the next tick."""
+    _pending_disable.discard(customer_id)
+
+
 def forget_device_lock(customer_id: str) -> None:
     """Drop cached device-lock state for a customer so the next tick
     recomputes it from scratch (e.g. after an admin changes max_devices)."""
@@ -360,6 +375,15 @@ async def device_enforce_loop() -> None:
             log.warning("device enforce tick failed: %s", exc)
 
 
+# Customers whose DB row says active=FALSE (expired/over quota) but whose
+# last disable push didn't confirm success on every region — e.g. a region
+# was mid-redeploy at that exact tick. Retried every reconcile tick until
+# every region confirms, so a customer can never keep using a region
+# indefinitely just because it happened to be unreachable the one moment
+# they crossed their limit.
+_pending_disable: set[str] = set()
+
+
 async def reconcile_once(pool) -> None:
     """One pass: refresh cached usage for every active customer, disable
     anyone who is now over quota or past expiry. Never raises."""
@@ -382,9 +406,31 @@ async def reconcile_once(pool) -> None:
         over_quota = bool(c["limit_bytes"]) and used >= c["limit_bytes"]
         if expired or over_quota:
             await pool.execute("UPDATE customers SET active = FALSE WHERE id = $1", c["id"])
-            await set_customer_active(pool, c["plan_id"], c["cred_uuid"], False)
+            ok = await set_customer_active(pool, c["plan_id"], c["cred_uuid"], False)
+            if ok:
+                _pending_disable.discard(c["id"])
+            else:
+                _pending_disable.add(c["id"])
+                log.warning("customer %s (%s) disable did not confirm on every region; will retry",
+                           c["name"], c["id"])
             log.info("customer %s (%s) disabled: %s", c["name"], c["id"],
                      "expired" if expired else "over quota")
+
+    for pending_id in list(_pending_disable):
+        c = await pool.fetchrow(
+            "SELECT id, plan_id, cred_uuid, name FROM customers WHERE id = $1", pending_id
+        )
+        if c is None:
+            _pending_disable.discard(pending_id)  # customer was deleted/revoked
+            continue
+        try:
+            ok = await set_customer_active(pool, c["plan_id"], c["cred_uuid"], False)
+        except Exception as exc:
+            log.warning("retry disable failed for customer %s: %s", pending_id, exc)
+            continue
+        if ok:
+            _pending_disable.discard(pending_id)
+            log.info("customer %s (%s) disable confirmed on retry", c["name"], pending_id)
 
 
 async def reconcile_loop() -> None:

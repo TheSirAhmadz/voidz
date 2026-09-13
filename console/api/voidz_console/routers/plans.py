@@ -210,6 +210,13 @@ async def update_customer(plan_id: str, customer_id: str, request: Request,
         if name:
             await pool.execute("UPDATE customers SET name = $2 WHERE id = $1", customer_id, name)
 
+    # Track the lifecycle fields as we edit them so the auto-restore check
+    # below (after all edits) sees the *new* values, not the stale row.
+    new_expiry = cust["expires_at"]
+    new_limit_bytes = cust["limit_bytes"]
+    new_used_bytes = cust["used_bytes_cached"]
+    touched_lifecycle = False
+
     if "extend_days" in body:
         try:
             days = int(body["extend_days"])
@@ -221,13 +228,15 @@ async def update_customer(plan_id: str, customer_id: str, request: Request,
         await pool.execute("UPDATE customers SET expires_at = $2 WHERE id = $1", customer_id, new_expiry)
         await quota_svc.patch_customer_links(pool, plan_id, cust["cred_uuid"],
                                              {"expires_at": new_expiry.isoformat()})
+        touched_lifecycle = True
 
     if "limit_gb" in body:
         try:
-            limit_bytes = int(float(body["limit_gb"]) * (1024 ** 3)) if body["limit_gb"] else 0
+            new_limit_bytes = int(float(body["limit_gb"]) * (1024 ** 3)) if body["limit_gb"] else 0
         except (TypeError, ValueError):
             raise HTTPException(status_code=400, detail="invalid limit_gb")
-        await pool.execute("UPDATE customers SET limit_bytes = $2 WHERE id = $1", customer_id, limit_bytes)
+        await pool.execute("UPDATE customers SET limit_bytes = $2 WHERE id = $1", customer_id, new_limit_bytes)
+        touched_lifecycle = True
 
     if "max_devices" in body:
         try:
@@ -242,13 +251,32 @@ async def update_customer(plan_id: str, customer_id: str, request: Request,
         quota_svc.forget_device_lock(customer_id)
 
     if body.get("reset_usage"):
+        new_used_bytes = 0
         await pool.execute("UPDATE customers SET used_bytes_cached = 0 WHERE id = $1", customer_id)
         await quota_svc.patch_customer_links(pool, plan_id, cust["cred_uuid"], {"reset_usage": True})
+        touched_lifecycle = True
 
     if "active" in body:
         active = bool(body["active"])
         await pool.execute("UPDATE customers SET active = $2 WHERE id = $1", customer_id, active)
+        if active:
+            quota_svc.forget_pending_disable(customer_id)
         await quota_svc.set_customer_active(pool, plan_id, cust["cred_uuid"], active)
+    elif touched_lifecycle and not cust["active"]:
+        # extend_days / limit_gb / reset_usage are exactly the actions an
+        # admin takes to undo an auto-disable (expired or over quota) — if
+        # the customer no longer breaches either limit after this edit,
+        # restore them instead of leaving them disabled until a separate
+        # "Enable" click. A customer disabled for some other reason keeps
+        # the same active=FALSE row, so this never fires unless the edit
+        # itself cleared the breach.
+        now = _utcnow()
+        still_expired = new_expiry is not None and new_expiry < now
+        still_over_quota = bool(new_limit_bytes) and new_used_bytes >= new_limit_bytes
+        if not still_expired and not still_over_quota:
+            await pool.execute("UPDATE customers SET active = TRUE WHERE id = $1", customer_id)
+            quota_svc.forget_pending_disable(customer_id)
+            await quota_svc.set_customer_active(pool, plan_id, cust["cred_uuid"], True)
 
     row = await pool.fetchrow("SELECT * FROM customers WHERE id = $1", customer_id)
     return _customer_out(row)

@@ -106,16 +106,16 @@ button{font:inherit;color:inherit;background:none;border:0;margin:0;padding:0;cu
 .sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);clip-path:inset(50%);white-space:nowrap}
 
 .backdrop{position:fixed;inset:0;z-index:0;pointer-events:none;overflow:hidden;background:var(--bg)}
-.bg-photo{position:absolute;inset:-10% -10% auto -10%;height:86vh;min-height:560px;
+.bg-photo{position:absolute;inset:-3% -3% auto -3%;height:82vh;min-height:540px;
   background-image:url("/assets/img/sub-bg-m.jpg");background-size:cover;background-position:62% 22%;
-  opacity:.72;filter:blur(38px) saturate(1.55) brightness(.92);will-change:transform;
+  opacity:.85;filter:blur(6px) saturate(1.25) brightness(.88);will-change:transform;
   animation:photo-in 1.4s var(--ease-out) both}
-@media (min-width:720px){.bg-photo{background-image:url("/assets/img/sub-bg.jpg");background-position:58% 32%;height:72vh;filter:blur(46px) saturate(1.5) brightness(.92)}}
-@keyframes photo-in{from{opacity:0;transform:scale(1.06)}to{opacity:.72;transform:scale(1)}}
+@media (min-width:720px){.bg-photo{background-image:url("/assets/img/sub-bg.jpg");background-position:58% 30%;height:70vh;filter:blur(8px) saturate(1.2) brightness(.88)}}
+@keyframes photo-in{from{opacity:0;transform:scale(1.03)}to{opacity:.85;transform:scale(1)}}
 .bg-scrim{position:absolute;inset:0;
   background:
-    linear-gradient(180deg,rgba(4,5,8,.35) 0%,rgba(5,7,10,.62) 46%,var(--bg) 86%),
-    radial-gradient(120% 70% at 50% -8%,transparent 32%,rgba(5,7,10,.55) 78%)}
+    linear-gradient(180deg,rgba(4,5,8,.1) 0%,rgba(5,7,10,.4) 50%,var(--bg) 88%),
+    radial-gradient(120% 70% at 50% -8%,transparent 38%,rgba(5,7,10,.4) 80%)}
 .backdrop::before{content:"";position:absolute;inset:0;
   background-image:radial-gradient(rgba(255,255,255,.05) 1px,transparent 1.3px);background-size:24px 24px;
   -webkit-mask-image:radial-gradient(ellipse 75% 50% at 50% 0%,#000 25%,transparent 72%);
@@ -188,10 +188,11 @@ _SUB_CSS = r"""
 /* pass card */
 .pass{position:relative;isolation:isolate;overflow:hidden;border-radius:var(--r-xl);padding:22px;
   background:
-    radial-gradient(120% 95% at 0% 0%,rgba(62,224,216,.15),rgba(62,224,216,0) 55%),
-    radial-gradient(110% 90% at 100% 100%,rgba(157,140,255,.15),rgba(157,140,255,0) 55%),
-    linear-gradient(160deg,#121823 0%,#0a0e15 100%);
-  box-shadow:inset 0 1px 0 rgba(255,255,255,.05),0 32px 64px -32px rgba(0,0,0,.85);
+    radial-gradient(120% 95% at 0% 0%,rgba(62,224,216,.22),rgba(62,224,216,0) 55%),
+    radial-gradient(110% 90% at 100% 100%,rgba(157,140,255,.2),rgba(157,140,255,0) 55%),
+    rgba(15,19,28,.5);
+  -webkit-backdrop-filter:blur(26px) saturate(1.4);backdrop-filter:blur(26px) saturate(1.4);
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.06),0 32px 64px -32px rgba(0,0,0,.85);
   transform:perspective(1100px) rotateX(var(--rx,0deg)) rotateY(var(--ry,0deg));
   transition:transform .7s var(--ease-out)}
 @media (min-width:600px){.pass{padding:26px}}
