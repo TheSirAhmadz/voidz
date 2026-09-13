@@ -50,291 +50,22 @@ def _is_public_client_path(path: str) -> bool:
             or path.startswith(("ws/", "xhttp-siz10/", "txhttp-siz10/")))
 
 
-FRIENDLY_404 = """<!doctype html><html><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1"><title>Voidz</title>
-<style>body{{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;
-background:#05070a;color:#eaf1f7;font-family:-apple-system,'Segoe UI',Roboto,sans-serif;
-background-image:radial-gradient(900px 420px at 20% -10%,rgba(56,214,217,.14),transparent),radial-gradient(700px 340px at 90% 110%,rgba(139,123,255,.12),transparent)}}
-.c{{max-width:420px;text-align:center;padding:30px;border:1px solid rgba(148,175,199,.16);border-radius:16px;
-background:rgba(20,26,37,.6);backdrop-filter:blur(20px)}}
-h2{{margin:0 0 8px}}p{{color:#9fb0c3;font-size:13.5px;line-height:1.55}}
-code{{background:rgba(255,255,255,.05);border:1px solid rgba(148,175,199,.16);border-radius:6px;padding:1px 6px;font-size:12px}}</style></head>
-<body><div class="c"><h2>{title}</h2><p>{body}</p></div></body></html>"""
-
-
-def _page(title: str, body: str, status: int = 200) -> "HTMLResponse":
+def _page(title: str, body: str, status: int = 200, icon: str | None = None,
+          tone: str | None = None) -> "HTMLResponse":
     from fastapi.responses import HTMLResponse
 
-    return HTMLResponse(FRIENDLY_404.format(title=title, body=body), status_code=status)
+    from .sub_page import render_notice
 
+    return HTMLResponse(render_notice(title, body, status, _LOGO_B64, icon_name=icon, tone=tone),
+                        status_code=status)
 
-import json as _json_mod  # noqa: E402
 
 def _sub_html_page(title: str, configs: list, host: str, sub_path: str,
                    qr_path: str = "", info: dict | None = None) -> str:
-    """Premium subscription page: QRs inline, copy buttons, app links,
-    EN/FA toggle. Browsers get it; clients are UA-sniffed to raw data."""
-    import html as _html
-    import io
+    from .sub_page import render_subscription_page
 
-    import qrcode
-    import qrcode.image.svg
-
-    esc = _html.escape
-
-    def qr_svg(text: str) -> str:
-        img = qrcode.make(text, image_factory=qrcode.image.svg.SvgPathImage,
-                          box_size=11, border=1)
-        buf = io.BytesIO()
-        img.save(buf)
-        return buf.getvalue().decode()
-
-    PROTO_META = {
-        "vless-ws": ("VLESS", "WebSocket", "#6f9bff"),
-        "trojan-ws": ("Trojan", "WebSocket", "#ef6b73"),
-        "shadowsocks": ("Shadowsocks", "AEAD", "#4ecb95"),
-        "xhttp-packet-up": ("xHTTP", "packet-up", "#e3b341"),
-        "xhttp-stream-up": ("xHTTP", "stream-up", "#e3b341"),
-    }
-    cards = ""
-    for i, c in enumerate(configs):
-        pname, transport, color = PROTO_META.get(c["protocol"], (c["protocol"], "", "#6f9bff"))
-        qr = qr_svg(c["share_url"])
-        region_chip = f'<span class="chip chip-region">{esc(c["region"])}</span>' if c.get("region") else ""
-        cards += f'''
-        <div class="cfg" style="--pc:{color};--d:{i}">
-          <div class="ch">
-            <div class="ch-l"><span class="dot-proto"></span><div><span class="pn">{esc(pname)}</span><span class="tr">{esc(transport)}</span></div></div>
-            <div class="ch-r">{region_chip}<span class="chip">{esc(c["protocol"])}</span></div>
-          </div>
-          <div class="u" id="u{i}">{esc(c["share_url"])}</div>
-          <div class="row">
-            <button class="btn-copy" onclick="cp(\'u{i}\',this)"><span class="ic ic-copy"></span><span class="en">Copy config</span><span class="fa" hidden>کپی کانفیگ</span></button>
-            <button class="g btn-qr" onclick="tg(\'q{i}\',this)"><span class="ic ic-qr"></span>QR</button>
-          </div>
-          <div class="qr" id="q{i}"><div class="qr-in">{qr}</div></div>
-        </div>'''
-
-    sub_url = f"https://{host}{sub_path}"
-    sub_qr = qr_svg(sub_url)
-    sb_url = f"https://{host}{sub_path}?fmt=singbox&host={host}"
-    cl_url = f"https://{host}{sub_path}?fmt=clash&host={host}"
-
-    info_card = ""
-    if info is not None:
-        used_gb = info["used_gb"]
-        total_gb = info.get("total_gb")
-        pct = max(0.0, min(100.0, info.get("pct") or 0.0))
-        unlimited = total_gb is None
-        ring_circ = 2 * 3.14159265 * 42
-        ring_offset = ring_circ * (1 - (0 if unlimited else pct / 100))
-        ring_color = "#ef6b73" if pct > 90 else ("#e3b341" if pct > 70 else "#35d7dc")
-        days_left = info.get("days_left")
-        days_total = info.get("days_total")
-        no_expiry = info.get("no_expiry", True)
-        online_count = info.get("online_count", 0)
-        max_devices = info.get("max_devices") or 0
-        is_online = online_count > 0
-        data_lbl = (f"{used_gb:.2f} GB <span class='sm'>used</span>" if unlimited
-                   else f"{used_gb:.2f} <span class='sm'>/ {total_gb:.0f} GB</span>")
-        day_val = "∞" if no_expiry else str(max(0, days_left))
-        day_lbl = ("unlimited" if no_expiry else f"of {days_total} days total")
-        day_lbl_fa = ("نامحدود" if no_expiry else f"از {days_total} روز کل")
-        dev_val = f"{online_count}/{max_devices}" if max_devices else str(online_count)
-        info_card = f'''
-        <div class="card stat-card">
-          <div class="stats">
-            <div class="stat">
-              <div class="ring-wrap">
-                <svg viewBox="0 0 100 100" class="ring">
-                  <circle cx="50" cy="50" r="42" class="ring-bg"/>
-                  <circle cx="50" cy="50" r="42" class="ring-fg" style="stroke:{ring_color};stroke-dasharray:{ring_circ:.1f};stroke-dashoffset:{ring_circ:.1f}" data-offset="{ring_offset:.1f}"/>
-                </svg>
-                <div class="ring-mid">{data_lbl}</div>
-              </div>
-              <div class="stat-lbl en">Data used</div>
-              <div class="stat-lbl fa" hidden>حجم مصرفی</div>
-            </div>
-            <div class="stat">
-              <div class="big-num">{day_val}</div>
-              <div class="stat-lbl en">{"Unlimited" if no_expiry else "days left"} <span class="sm">{"" if no_expiry else "· "+day_lbl}</span></div>
-              <div class="stat-lbl fa" hidden>{"نامحدود" if no_expiry else "روز باقیمانده"} <span class="sm">{"" if no_expiry else "· "+day_lbl_fa}</span></div>
-            </div>
-            <div class="stat">
-              <div class="dev-pill {'on' if is_online else 'off'}"><span class="dot"></span>{dev_val}</div>
-              <div class="stat-lbl en">{"Online now" if is_online else "Offline"}</div>
-              <div class="stat-lbl fa" hidden>{"الان آنلاین" if is_online else "آفلاین"}</div>
-            </div>
-          </div>
-        </div>'''
-
-    return f"""<!doctype html><html lang="en"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>{esc(title)}</title>
-<style>
-:root{{
-  --bg:#050709;--ink:#eef3f8;--ink-dim:#93a3b8;--ink-faint:#5c6b80;
-  --line:rgba(163,186,214,.14);--line-soft:rgba(163,186,214,.09);
-  --glass:rgba(19,24,34,.55);
-  --teal:#35d7dc;--violet:#8b7bff;--grad:linear-gradient(135deg,var(--teal),var(--violet));
-  --ease:cubic-bezier(.22,1,.36,1);--ease-spring:cubic-bezier(.34,1.56,.64,1);
-}}
-*{{box-sizing:border-box}}
-::selection{{background:rgba(56,214,217,.3);color:#fff}}
-@media (prefers-reduced-motion:reduce){{*{{animation-duration:.001ms!important;animation-iteration-count:1!important;transition-duration:.001ms!important}}}}
-body{{background:var(--bg);color:var(--ink);font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Vazirmatn',sans-serif;margin:0;padding:0 16px 80px;
-  position:relative;overflow-x:hidden;-webkit-font-smoothing:antialiased}}
-.bg-orb{{position:fixed;border-radius:50%;filter:blur(70px);pointer-events:none;z-index:0;opacity:.55;will-change:transform}}
-.bg-orb.o1{{width:520px;height:520px;top:-260px;left:50%;transform:translateX(-50%);background:radial-gradient(circle,rgba(56,214,217,.35),transparent 70%);animation:drift1 22s ease-in-out infinite}}
-.bg-orb.o2{{width:420px;height:420px;bottom:-180px;right:-120px;background:radial-gradient(circle,rgba(139,123,255,.3),transparent 70%);animation:drift2 26s ease-in-out infinite}}
-@keyframes drift1{{0%,100%{{transform:translate(-50%,0) scale(1)}}50%{{transform:translate(-46%,26px) scale(1.06)}}}}
-@keyframes drift2{{0%,100%{{transform:translate(0,0) scale(1)}}50%{{transform:translate(-18px,-22px) scale(1.08)}}}}
-.w{{max-width:600px;margin:0 auto;position:relative;z-index:1}}
-.top{{display:flex;align-items:center;gap:12px;padding:30px 2px 6px;opacity:0;animation:rise .6s var(--ease) .05s forwards}}
-.moon{{width:36px;height:36px;object-fit:contain;filter:drop-shadow(0 0 10px rgba(56,214,217,.55));animation:float 5s ease-in-out infinite}}
-@keyframes float{{0%,100%{{transform:translateY(0)}}50%{{transform:translateY(-4px)}}}}
-h1{{font-size:21px;margin:0;letter-spacing:-.2px;font-weight:800}}
-.sub2{{color:var(--ink-dim);font-size:12.5px;margin-top:1px}}
-.hero{{text-align:center;padding:22px 0 24px;opacity:0;animation:rise .6s var(--ease) .12s forwards}}
-.hero h2{{margin:0 0 7px;font-size:19px;font-weight:800;letter-spacing:-.3px}}
-.hero p{{margin:0;color:var(--ink-dim);font-size:13.5px;line-height:1.5}}
-.card{{background:var(--glass);backdrop-filter:blur(22px) saturate(140%);-webkit-backdrop-filter:blur(22px) saturate(140%);
-  border:1px solid var(--line);border-radius:20px;padding:19px;margin-bottom:15px;
-  box-shadow:0 20px 50px -12px rgba(0,0,0,.55),inset 0 1px 0 rgba(255,255,255,.04);
-  opacity:0;animation:rise .6s var(--ease) forwards;transition:border-color .25s,transform .25s}}
-.card:hover{{border-color:rgba(163,186,214,.24)}}
-.card h3{{margin:0 0 4px;font-size:14.5px;font-weight:700;letter-spacing:-.1px}}
-.lbl{{color:var(--ink-dim);font-size:12.5px;margin:0 0 12px;line-height:1.5}}
-.subu{{display:flex;gap:9px;align-items:stretch}}
-.subu .u{{flex:1;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px;background:rgba(0,0,0,.28);
-  border:1px solid var(--line);border-radius:10px;padding:10px 11px;word-break:break-all;color:var(--ink-dim);
-  display:flex;align-items:center}}
-.btn{{padding:0 18px;height:40px;border-radius:10px;border:none;background:var(--grad);color:#03141a;font-weight:800;
-  font-size:12.5px;cursor:pointer;box-shadow:0 8px 20px -6px rgba(56,214,217,.45);white-space:nowrap;
-  display:inline-flex;align-items:center;gap:6px;transition:transform .18s var(--ease-spring),box-shadow .18s}}
-.btn:active{{transform:scale(.96)}}
-.btn:hover{{box-shadow:0 10px 26px -6px rgba(56,214,217,.6)}}
-.btn.g{{background:rgba(255,255,255,.06);color:var(--ink);box-shadow:none;border:1px solid var(--line)}}
-.btn.g:hover{{border-color:rgba(56,214,217,.4);background:rgba(255,255,255,.09)}}
-.fmts{{display:flex;gap:7px;flex-wrap:wrap;margin-top:12px}}
-.fmt{{font-size:11px;color:var(--ink-dim);border:1px solid var(--line);border-radius:999px;padding:5px 13px;
-  text-decoration:none;transition:all .2s var(--ease)}}
-.fmt:hover{{color:var(--ink);border-color:rgba(56,214,217,.45);background:rgba(56,214,217,.06);transform:translateY(-1px)}}
-.cfg{{background:rgba(255,255,255,.025);border:1px solid var(--line-soft);border-radius:16px;padding:15px 16px;margin-bottom:11px;
-  position:relative;overflow:hidden;opacity:0;animation:rise .5s var(--ease) forwards;
-  animation-delay:calc(.32s + var(--d) * .07s);transition:border-color .25s,transform .2s}}
-.cfg::before{{content:'';position:absolute;left:0;top:10px;bottom:10px;width:3px;border-radius:3px;background:var(--pc);
-  box-shadow:0 0 12px 1px var(--pc)}}
-.cfg:hover{{border-color:rgba(163,186,214,.22);transform:translateY(-1px)}}
-.ch{{display:flex;justify-content:space-between;align-items:center;gap:8px;padding-left:6px}}
-.ch-l{{display:flex;align-items:center;gap:9px}}
-.dot-proto{{width:8px;height:8px;border-radius:50%;background:var(--pc);box-shadow:0 0 8px 1px var(--pc);flex:none}}
-.pn{{font-weight:800;font-size:13.5px;letter-spacing:-.1px}}
-.tr{{color:var(--ink-faint);font-size:11px;margin-left:7px;font-weight:500}}
-.ch-r{{display:flex;gap:6px}}
-.chip{{font-size:9.5px;color:#7ce8ea;border:1px solid rgba(56,214,217,.32);background:rgba(56,214,217,.08);
-  border-radius:999px;padding:2px 9px;font-family:ui-monospace,monospace;font-weight:600;letter-spacing:.2px}}
-.chip-region{{color:#c8b8ff;border-color:rgba(139,123,255,.35);background:rgba(139,123,255,.1)}}
-.u{{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:10.5px;color:var(--ink-dim);
-  background:rgba(0,0,0,.28);border:1px solid var(--line-soft);border-radius:10px;padding:9px 10px;margin:11px 0;
-  word-break:break-all;max-height:60px;overflow:auto}}
-.row{{display:flex;gap:8px}}
-.btn-copy,.btn-qr{{display:inline-flex;align-items:center;gap:6px}}
-.ic{{width:13px;height:13px;display:inline-block;flex:none;background:currentColor}}
-.ic-copy{{-webkit-mask:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.4'%3E%3Crect x='9' y='9' width='12' height='12' rx='2'/%3E%3Cpath d='M5 15V5a2 2 0 0 1 2-2h10'/%3E%3C/svg%3E") center/contain no-repeat;
-  mask:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.4'%3E%3Crect x='9' y='9' width='12' height='12' rx='2'/%3E%3Cpath d='M5 15V5a2 2 0 0 1 2-2h10'/%3E%3C/svg%3E") center/contain no-repeat}}
-.ic-qr{{-webkit-mask:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.4'%3E%3Crect x='3' y='3' width='7' height='7'/%3E%3Crect x='14' y='3' width='7' height='7'/%3E%3Crect x='3' y='14' width='7' height='7'/%3E%3Cpath d='M14 14h3v3h-3zM20 14v3M14 20h3M20 20v.01'/%3E%3C/svg%3E") center/contain no-repeat;
-  mask:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.4'%3E%3Crect x='3' y='3' width='7' height='7'/%3E%3Crect x='14' y='3' width='7' height='7'/%3E%3Crect x='3' y='14' width='7' height='7'/%3E%3Cpath d='M14 14h3v3h-3zM20 14v3M14 20h3M20 20v.01'/%3E%3C/svg%3E") center/contain no-repeat}}
-.qr{{display:grid;grid-template-rows:0fr;opacity:0;transition:grid-template-rows .45s var(--ease),opacity .35s var(--ease),margin-top .45s var(--ease)}}
-.qr.open{{grid-template-rows:1fr;opacity:1;margin-top:13px}}
-.qr-in{{overflow:hidden;text-align:center}}
-.qr-in svg{{width:200px;height:200px;background:#fff;border-radius:14px;padding:8px;box-shadow:0 12px 30px -8px rgba(0,0,0,.5)}}
-.ft{{text-align:center;color:var(--ink-faint);font-size:11.5px;margin-top:28px;opacity:0;animation:rise .6s var(--ease) .5s forwards}}
-.ft b{{color:var(--ink-dim);font-weight:700}}
-.fa{{display:none}}
-body.fa{{direction:rtl}}
-body.fa .en{{display:none}}
-body.fa .fa{{display:inline}}
-.stat-card{{padding:22px 16px}}
-.stats{{display:flex;justify-content:space-around;align-items:center;gap:6px;flex-wrap:wrap}}
-.stat{{display:flex;flex-direction:column;align-items:center;gap:9px;min-width:92px}}
-.ring-wrap{{position:relative;width:98px;height:98px}}
-.ring{{width:98px;height:98px;transform:rotate(-90deg)}}
-.ring-bg{{fill:none;stroke:rgba(163,186,214,.14);stroke-width:7}}
-.ring-fg{{fill:none;stroke-width:7;stroke-linecap:round;transition:stroke-dashoffset 1.3s cubic-bezier(.22,1,.36,1) .3s}}
-.ring-mid{{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;text-align:center;
-  font-size:12.5px;font-weight:800;line-height:1.2;padding:0 6px}}
-.ring-mid .sm{{display:block;font-weight:500;color:var(--ink-dim);font-size:10px;margin-top:1px}}
-.big-num{{font-size:36px;font-weight:800;line-height:1;background:var(--grad);-webkit-background-clip:text;
-  background-clip:text;color:transparent;animation:pop .55s var(--ease-spring) .2s backwards}}
-.stat-lbl{{font-size:11.5px;color:var(--ink-dim);text-align:center;font-weight:500}}
-.stat-lbl .sm{{color:var(--ink-faint);font-size:10px}}
-.dev-pill{{display:flex;align-items:center;gap:8px;font-size:15px;font-weight:800;padding:10px 18px;border-radius:999px;
-  border:1px solid var(--line);background:rgba(255,255,255,.03);transition:all .3s}}
-.dev-pill.on{{border-color:rgba(78,203,149,.5);color:#4ecb95;background:rgba(78,203,149,.06)}}
-.dev-pill.off{{color:var(--ink-dim)}}
-.dot{{width:8px;height:8px;border-radius:50%;background:var(--ink-faint);flex:none}}
-.dev-pill.on .dot{{background:#4ecb95;box-shadow:0 0 0 rgba(78,203,149,.6);animation:pulse 1.8s infinite}}
-@keyframes pulse{{0%{{box-shadow:0 0 0 0 rgba(78,203,149,.55)}}70%{{box-shadow:0 0 0 9px rgba(78,203,149,0)}}100%{{box-shadow:0 0 0 0 rgba(78,203,149,0)}}}}
-@keyframes pop{{0%{{transform:scale(.6);opacity:0}}100%{{transform:scale(1);opacity:1}}}}
-@keyframes rise{{from{{opacity:0;transform:translateY(14px)}}to{{opacity:1;transform:translateY(0)}}}}
-.toast{{position:fixed;bottom:26px;left:50%;transform:translateX(-50%) translateY(20px);background:#12161f;
-  border:1px solid rgba(78,203,149,.35);color:#6fe3ac;padding:10px 20px;border-radius:999px;font-size:13px;
-  font-weight:600;z-index:99;opacity:0;transition:all .35s var(--ease-spring);pointer-events:none;
-  box-shadow:0 12px 30px -8px rgba(0,0,0,.6);display:flex;align-items:center;gap:7px}}
-.toast.show{{opacity:1;transform:translateX(-50%) translateY(0)}}
-.ic-ok{{width:14px;height:14px;background:currentColor;
-  -webkit-mask:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='3'%3E%3Cpath d='M20 6 9 17l-5-5'/%3E%3C/svg%3E") center/contain no-repeat;
-  mask:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='3'%3E%3Cpath d='M20 6 9 17l-5-5'/%3E%3C/svg%3E") center/contain no-repeat}}
-</style></head><body>
-<div class="bg-orb o1"></div><div class="bg-orb o2"></div>
-<div class="w">
-<div class="top"><img class="moon" src="data:image/png;base64,{_LOGO_B64}" alt="Voidz">
-<div><h1>Voidz</h1><div class="sub2">{esc(title)}</div></div></div>
-<div class="hero"><h2 class="en">Your configs are ready</h2><h2 class="fa" hidden>کانفیگ‌های شما آماده است</h2>
-<p class="en">Import the subscription into your client, or copy each config individually.</p>
-<p class="fa" hidden>سابسکریپشن را وارد کلاینت کنید یا هر کانفیگ را جدا کپی کنید.</p></div>
-{info_card}
-<div class="card" style="animation-delay:.2s">
-<h3 class="en">Subscription — all protocols</h3><h3 class="fa" hidden>سابسکریپشن — همه پروتکل‌ها</h3>
-<p class="lbl en">One URL, every config, auto-updates. Add it under Subscriptions in your client.</p>
-<p class="lbl fa" hidden>یک لینک برای همه کانفیگ‌ها — در بخش Subscriptions اپ وارد کنید.</p>
-<div class="subu"><div class="u" id="subu">{esc(sub_url)}</div><button class="btn" onclick="cp('subu',this)"><span class="ic ic-copy"></span><span class="en">Copy</span><span class="fa" hidden>کپی</span></button></div>
-<div class="fmts">
-<a class="fmt" href="{esc(sb_url)}" target="_blank" rel="noopener">sing-box JSON</a>
-<a class="fmt" href="{esc(cl_url)}" target="_blank" rel="noopener">Clash Meta YAML</a>
-<a class="fmt" href="{esc(sub_url)}" target="_blank" rel="noopener">v2ray base64</a>
-</div>
-<div class="qr open" style="margin-top:13px"><div class="qr-in">{sub_qr}</div></div>
-<div style="color:var(--ink-faint);font-size:10.5px;text-align:center;margin-top:2px">Scan the subscription with your client</div>
-</div>
-<div class="card" style="animation-delay:.26s"><h3 class="en">Individual configs</h3><h3 class="fa" hidden>کانفیگ‌های جداگانه</h3>{cards}</div>
-<p class="ft">Powered by <b>Voidz</b></p>
-</div>
-<div class="toast" id="toast"><span class="ic-ok"></span><span id="toast-txt">Copied</span></div>
-<script>
-var toastTimer=null;
-function cp(id,btn){{
-  var text=document.getElementById(id).textContent.trim();
-  navigator.clipboard.writeText(text).then(function(){{
-    var t=document.getElementById('toast');
-    document.getElementById('toast-txt').textContent=(document.body.classList.contains('fa')?'کپی شد':'Copied');
-    clearTimeout(toastTimer);
-    t.classList.add('show');
-    toastTimer=setTimeout(function(){{t.classList.remove('show')}},1600);
-    if(btn){{btn.style.transform='scale(.94)';setTimeout(function(){{btn.style.transform=''}},160)}}
-  }});
-}}
-function tg(id,btn){{
-  var b=document.getElementById(id);
-  var open=!b.classList.contains('open');
-  b.classList.toggle('open',open);
-  btn.classList.toggle('active',open);
-}}
-requestAnimationFrame(function(){{requestAnimationFrame(function(){{
-  document.querySelectorAll('.ring-fg').forEach(function(el){{el.style.strokeDashoffset=el.dataset.offset}})
-}})}})
-</script></body></html>"""
+    return render_subscription_page(title=title, configs=configs, host=host, sub_path=sub_path,
+                                    logo_b64=_LOGO_B64, qr_endpoint=qr_path, info=info)
 
 def _singbox_outbound(url: str) -> dict:
     """vless:// / trojan:// URI -> sing-box outbound. Shadowsocks links pass
@@ -651,6 +382,31 @@ async def instance_subscription(token: str, request: Request):
     return _Response(content=body, media_type="text/plain", headers=_headers())
 
 
+@router.post("/sub/{sub_token}/qr")
+async def plan_subscription_qr(sub_token: str, request: Request):
+    """QR (SVG) for the subscription page, generated on demand so the page
+    itself doesn't ship one per config. Authorized by an active sub token."""
+    from fastapi.responses import Response as _Response
+
+    from .sub_page import qr_svg
+
+    pool = get_pool(request)
+    active = await pool.fetchval(
+        "SELECT active FROM customers WHERE sub_token = $1", sub_token
+    )
+    if not active:
+        raise HTTPException(status_code=404, detail="unknown subscription")
+    try:
+        body = await request.json()
+    except ValueError:
+        raise HTTPException(status_code=400, detail="json body required")
+    text = str(body.get("text") or "") if isinstance(body, dict) else ""
+    if not text or len(text) > 4096:
+        raise HTTPException(status_code=400, detail="text required (max 4096 chars)")
+    return _Response(content=qr_svg(text), media_type="image/svg+xml",
+                     headers={"Cache-Control": "private, max-age=3600"})
+
+
 @router.get("/sub/{sub_token}")
 async def plan_subscription(sub_token: str, request: Request):
     """Multi-region subscription: one config per region in the customer's
@@ -680,11 +436,11 @@ async def plan_subscription(sub_token: str, request: Request):
     if cust["expires_at"] and cust["expires_at"] < now:
         return _page("Subscription expired",
                      "This subscription's time has run out. Contact whoever "
-                     "gave you this link to renew it.", status=403)
+                     "gave you this link to renew it.", status=403, icon="clock")
     if cust["limit_bytes"] and cust["used_bytes_cached"] >= cust["limit_bytes"]:
         return _page("Data limit reached",
                      "This subscription has used all of its allotted data. "
-                     "Contact whoever gave you this link to top it up.", status=403)
+                     "Contact whoever gave you this link to top it up.", status=403, icon="data")
 
     pi_rows = await pool.fetch(
         "SELECT pi.instance_id, pi.region_label, i.status, "
@@ -792,8 +548,11 @@ async def plan_subscription(sub_token: str, request: Request):
             "no_expiry": no_expiry,
             "online_count": len(device_ips),
             "max_devices": int(cust["max_devices"] or 0),
+            "expires_at": cust["expires_at"],
+            "plan_name": cust["plan_name"],
         }
-        return HTMLResponse(_sub_html_page(title, configs, host, f"/sub/{sub_token}", info=info))
+        return HTMLResponse(_sub_html_page(title, configs, host, f"/sub/{sub_token}",
+                                           qr_path=f"/sub/{sub_token}/qr", info=info))
 
     def _headers(extra: dict | None = None) -> dict:
         expire_ts = int(cust["expires_at"].timestamp()) if cust["expires_at"] else 0
