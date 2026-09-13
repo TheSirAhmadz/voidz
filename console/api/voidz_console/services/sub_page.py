@@ -106,11 +106,12 @@ button{font:inherit;color:inherit;background:none;border:0;margin:0;padding:0;cu
 .sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);clip-path:inset(50%);white-space:nowrap}
 
 .backdrop{position:fixed;inset:0;z-index:0;pointer-events:none;overflow:hidden;background:var(--bg)}
-.bg-photo{position:absolute;inset:-2% -2% auto -2%;height:78vh;min-height:520px;
+.bg-photo{position:absolute;inset:-10% -10% auto -10%;height:86vh;min-height:560px;
   background-image:url("/assets/img/sub-bg-m.jpg");background-size:cover;background-position:62% 22%;
-  opacity:.6;will-change:transform;animation:photo-in 1.4s var(--ease-out) both}
-@media (min-width:720px){.bg-photo{background-image:url("/assets/img/sub-bg.jpg");background-position:58% 32%;height:64vh}}
-@keyframes photo-in{from{opacity:0;transform:scale(1.04)}to{opacity:.6;transform:scale(1)}}
+  opacity:.72;filter:blur(38px) saturate(1.55) brightness(.92);will-change:transform;
+  animation:photo-in 1.4s var(--ease-out) both}
+@media (min-width:720px){.bg-photo{background-image:url("/assets/img/sub-bg.jpg");background-position:58% 32%;height:72vh;filter:blur(46px) saturate(1.5) brightness(.92)}}
+@keyframes photo-in{from{opacity:0;transform:scale(1.06)}to{opacity:.72;transform:scale(1)}}
 .bg-scrim{position:absolute;inset:0;
   background:
     linear-gradient(180deg,rgba(4,5,8,.35) 0%,rgba(5,7,10,.62) 46%,var(--bg) 86%),
@@ -161,7 +162,7 @@ _SUB_CSS = r"""
   .rail .metric--wide{grid-column:1 / -1}
   .rail .metric{padding:14px}
   .rail .metric-foot{white-space:normal}
-  .rail-foot{display:block;margin:6px 4px 0;color:var(--fg-4);font-size:12px}
+  .rail-foot{display:flex;justify-content:center;margin:6px 0 0 14px;color:var(--fg-4);font-size:12px}
   .stage{min-width:0}
   .stage .panel{margin:0}
   .foot{margin-top:22px}
