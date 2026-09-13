@@ -29,6 +29,12 @@ log = get("runtime", "voidz.console.quota")
 RECONCILE_INTERVAL = 20.0
 DEVICE_CHECK_INTERVAL = 5.0
 
+# How long a connection must persist (or how much it must carry) before it
+# counts as a device against the cap. Latency probes from a proxy client hit
+# every region at once and die in well under a second; real usage does not.
+DEVICE_MIN_AGE_SECONDS = 20.0
+DEVICE_MIN_BYTES = 64 * 1024
+
 # Last allowed_ips tuple pushed to Core for each customer, so a tick only
 # PATCHes every region when the locked device set actually changed. A single
 # console process, so plain in-memory state is fine — a restart just means
@@ -232,14 +238,21 @@ async def _sum_usage(pool, plan_id: str, cred_uuid: str) -> int:
 
 
 async def _global_device_ips(pool, plan_id: str, cred_uuid: str, protocols: list[str]) -> dict[str, str]:
-    """Distinct client IPs currently holding an open connection on this
-    customer's link, unioned across every region, mapped to the earliest
-    `first_connected_at` seen for that IP in any region — each region's Core
-    only knows about its own connections, so a per-region count can't catch
-    a customer connected from two different regions at once, and the
-    timestamp lets us keep whichever device connected first when trimming
-    down to the device cap."""
+    """Client IPs that are *actually in use* on this customer's link right
+    now, unioned across every region, mapped to the earliest
+    `first_connected_at` seen for that IP in any region.
+
+    Only established connections count. Proxy clients routinely probe every
+    server in a subscription at once to measure latency, and a single device
+    can leave those probes behind several different egress IPs (multi-homed
+    ISPs, CGNAT pools and split tunnels pick a different exit per
+    destination). Counting those momentary probes would make one device look
+    like one-per-region and lock the customer out of every region but the
+    first — so an IP only counts once its connection has lasted
+    DEVICE_MIN_AGE_SECONDS or has moved DEVICE_MIN_BYTES of real traffic.
+    """
     wanted = ",".join(_link_uuid(cred_uuid, proto) for proto in protocols)
+    now = _utcnow()
     first_seen: dict[str, str] = {}
     for pi in await _plan_instances(pool, plan_id):
         worker_url = await _instance_worker(pool, pi["instance_id"])
@@ -257,9 +270,25 @@ async def _global_device_ips(pool, plan_id: str, cred_uuid: str, protocols: list
             ts = conn.get("first_connected_at") or ""
             if not ip:
                 continue
+            if not _is_established(ts, conn.get("bytes"), now):
+                continue
             if ip not in first_seen or ts < first_seen[ip]:
                 first_seen[ip] = ts
     return first_seen
+
+
+def _is_established(first_connected_at: str, used_bytes, now: datetime) -> bool:
+    """A connection counts as a real device only once it has outlived a
+    latency probe or carried a meaningful amount of traffic."""
+    if int(used_bytes or 0) >= DEVICE_MIN_BYTES:
+        return True
+    try:
+        started = datetime.fromisoformat(first_connected_at)
+    except (TypeError, ValueError):
+        return False
+    if started.tzinfo is None:
+        started = started.replace(tzinfo=timezone.utc)
+    return (now - started).total_seconds() >= DEVICE_MIN_AGE_SECONDS
 
 
 async def enforce_device_limits(pool) -> None:

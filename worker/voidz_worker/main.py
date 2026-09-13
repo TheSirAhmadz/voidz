@@ -339,6 +339,11 @@ async def _forward_ws(instance_id: str, path: str, ws: WebSocket) -> None:
     upstream_url = f"ws://127.0.0.1:{status['port']}/{path}"
     headers = {k: v for k, v in ws.headers.items()
                if k.lower() in ("x-forwarded-for", "x-real-ip", "user-agent")}
+    # Carry Core's own close code/reason back to the client. Without this every
+    # rejection (bad credential, device limit, quota) reaches the client as a
+    # plain 1000, which makes a refused connection indistinguishable from a
+    # finished one.
+    close_code, close_reason = 1000, ""
     try:
         async with ws_lib.connect(upstream_url, additional_headers=headers, max_size=None,
                                   ping_interval=20, ping_timeout=20) as upstream:
@@ -374,6 +379,9 @@ async def _forward_ws(instance_id: str, path: str, ws: WebSocket) -> None:
             )
             for t in pending:
                 t.cancel()
+            if upstream.close_code:
+                close_code = upstream.close_code
+                close_reason = upstream.close_reason or ""
     except Exception:
         try:
             await ws.close(code=1014, reason="upstream unavailable")
@@ -382,7 +390,7 @@ async def _forward_ws(instance_id: str, path: str, ws: WebSocket) -> None:
         return
     finally:
         try:
-            await ws.close()
+            await ws.close(code=close_code, reason=close_reason)
         except Exception:
             pass
 
