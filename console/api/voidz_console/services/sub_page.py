@@ -105,18 +105,27 @@ button{font:inherit;color:inherit;background:none;border:0;margin:0;padding:0;cu
 .ic{width:18px;height:18px;flex:none;fill:none;stroke:currentColor;stroke-width:1.75;stroke-linecap:round;stroke-linejoin:round}
 .sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);clip-path:inset(50%);white-space:nowrap}
 
-.backdrop{position:fixed;inset:0;z-index:0;pointer-events:none;overflow:hidden}
+.backdrop{position:fixed;inset:0;z-index:0;pointer-events:none;overflow:hidden;background:var(--bg)}
+.bg-photo{position:absolute;inset:-2% -2% auto -2%;height:78vh;min-height:520px;
+  background-image:url("/assets/img/sub-bg-m.jpg");background-size:cover;background-position:62% 22%;
+  opacity:.6;will-change:transform;animation:photo-in 1.4s var(--ease-out) both}
+@media (min-width:720px){.bg-photo{background-image:url("/assets/img/sub-bg.jpg");background-position:58% 32%;height:64vh}}
+@keyframes photo-in{from{opacity:0;transform:scale(1.04)}to{opacity:.6;transform:scale(1)}}
+.bg-scrim{position:absolute;inset:0;
+  background:
+    linear-gradient(180deg,rgba(4,5,8,.35) 0%,rgba(5,7,10,.62) 46%,var(--bg) 86%),
+    radial-gradient(120% 70% at 50% -8%,transparent 32%,rgba(5,7,10,.55) 78%)}
 .backdrop::before{content:"";position:absolute;inset:0;
-  background-image:radial-gradient(rgba(255,255,255,.075) 1px,transparent 1.3px);background-size:24px 24px;
+  background-image:radial-gradient(rgba(255,255,255,.05) 1px,transparent 1.3px);background-size:24px 24px;
   -webkit-mask-image:radial-gradient(ellipse 75% 50% at 50% 0%,#000 25%,transparent 72%);
   mask-image:radial-gradient(ellipse 75% 50% at 50% 0%,#000 25%,transparent 72%)}
-.glow{position:absolute;border-radius:50%;will-change:transform}
+.glow{position:absolute;border-radius:50%;will-change:transform;mix-blend-mode:screen}
 .glow--a{width:620px;height:460px;left:50%;top:-280px;margin-left:-360px;
-  background:radial-gradient(closest-side,rgba(62,224,216,.32),rgba(62,224,216,0));animation:drift-a 19s var(--ease) infinite alternate}
+  background:radial-gradient(closest-side,rgba(62,224,216,.16),rgba(62,224,216,0));animation:drift-a 19s var(--ease) infinite alternate}
 .glow--b{width:560px;height:440px;left:50%;top:-220px;margin-left:-40px;
-  background:radial-gradient(closest-side,rgba(157,140,255,.28),rgba(157,140,255,0));animation:drift-b 23s var(--ease) infinite alternate}
+  background:radial-gradient(closest-side,rgba(157,140,255,.14),rgba(157,140,255,0));animation:drift-b 23s var(--ease) infinite alternate}
 .glow--c{width:680px;height:560px;right:-300px;bottom:-360px;
-  background:radial-gradient(closest-side,rgba(127,180,255,.14),rgba(127,180,255,0));animation:drift-a 29s var(--ease) infinite alternate-reverse}
+  background:radial-gradient(closest-side,rgba(127,180,255,.08),rgba(127,180,255,0));animation:drift-a 29s var(--ease) infinite alternate-reverse}
 @keyframes drift-a{to{transform:translate3d(-56px,36px,0) scale(1.1)}}
 @keyframes drift-b{to{transform:translate3d(64px,24px,0) scale(.92)}}
 
@@ -135,6 +144,33 @@ _SUB_CSS = r"""
 .shell{position:relative;z-index:1;width:100%;max-width:640px;margin:0 auto;
   padding:max(16px,env(safe-area-inset-top)) 16px calc(36px + env(safe-area-inset-bottom))}
 @media (min-width:600px){.shell{padding:28px 24px 48px}}
+
+/* mobile: one column, top to bottom */
+.rail-foot{display:none}
+.foot .foot-note--mobile{display:inline-flex}
+
+/* desktop: a fixed-width rail (identity + import) beside a wide scrolling
+   stage (the config list) instead of one long stacked column */
+@media (min-width:960px){
+  .shell{max-width:1180px;padding:36px 32px 56px}
+  .topbar{margin-bottom:22px}
+  .layout{display:grid;grid-template-columns:360px minmax(0,1fr);align-items:start;gap:22px}
+  .rail{position:sticky;top:32px;display:flex;flex-direction:column;gap:14px}
+  .rail .pass,.rail .panel{margin:0}
+  .rail .metrics{grid-template-columns:1fr 1fr}
+  .rail .metric--wide{grid-column:1 / -1}
+  .rail .metric{padding:14px}
+  .rail .metric-foot{white-space:normal}
+  .rail-foot{display:block;margin:6px 4px 0;color:var(--fg-4);font-size:12px}
+  .stage{min-width:0}
+  .stage .panel{margin:0}
+  .foot{margin-top:22px}
+  .foot .foot-note--mobile{display:none}
+}
+@media (min-width:1320px){
+  .shell{max-width:1280px}
+  .layout{grid-template-columns:380px minmax(0,1fr)}
+}
 
 /* top bar */
 .topbar{display:flex;align-items:center;justify-content:space-between;gap:12px;height:40px;margin-bottom:16px}
@@ -734,8 +770,8 @@ def _head(title: str, logo_b64: str, css: str) -> str:
     )
 
 
-_BACKDROP = ('<div class="backdrop" aria-hidden="true"><div class="glow glow--a"></div>'
-             '<div class="glow glow--b"></div><div class="glow glow--c"></div></div>')
+_BACKDROP = ('<div class="backdrop" aria-hidden="true"><div class="bg-photo"></div><div class="bg-scrim"></div>'
+             '<div class="glow glow--a"></div><div class="glow glow--b"></div><div class="glow glow--c"></div></div>')
 
 
 # ---------------------------------------------------------------------------
@@ -932,50 +968,58 @@ def render_subscription_page(*, title: str, configs: list, host: str, sub_path: 
     <div class="sync" data-tone="ok"><span class="dot" aria-hidden="true"></span>Updated <time datetime="{now.isoformat()}" data-ts>{now:%H:%M} UTC</time></div>
   </header>
 
-  <section class="pass reveal" style="--i:1" aria-label="Subscription overview">
-    <div class="pass-head">
-      <div class="pass-id">
-        <h1 class="pass-name">{esc(name)}</h1>
-        <div class="pass-sub">{pass_sub}</div>
-      </div>
-      <span class="status" data-tone="{status_tone}"><span class="dot" aria-hidden="true"></span>{esc(status_text)}</span>
-    </div>
-    {metrics}
-  </section>
+  <div class="layout">
+    <div class="rail">
+      <section class="pass reveal" style="--i:1" aria-label="Subscription overview">
+        <div class="pass-head">
+          <div class="pass-id">
+            <h1 class="pass-name">{esc(name)}</h1>
+            <div class="pass-sub">{pass_sub}</div>
+          </div>
+          <span class="status" data-tone="{status_tone}"><span class="dot" aria-hidden="true"></span>{esc(status_text)}</span>
+        </div>
+        {metrics}
+      </section>
 
-  <section class="panel reveal" style="--i:2" aria-labelledby="import-title">
-    <div class="panel-head">
-      <div>
-        <h2 class="panel-title" id="import-title">Import</h2>
-        <p class="panel-desc">One link keeps every location in sync.</p>
-      </div>
-    </div>
-    <div class="seg" role="tablist" aria-label="Subscription format"><span class="seg-ind" aria-hidden="true"></span>{seg_btns}</div>
-    <div class="linkbox">{icon("link")}<span class="link-text" title="{esc(base)}">{link_display}</span></div>
-    <div class="actions">
-      <button class="btn btn--primary" type="button" data-action="copy-sub">
-        <span class="swap"><span>{icon("copy")}Copy link</span><span>{icon("check")}Copied</span></span>
-      </button>
-      <button class="btn btn--ghost" type="button" data-action="qr-sub">{icon("qr")}QR code</button>
-    </div>
-    <p class="hint">{icon("info")}<span id="format-hint">{esc(formats[0][4])}</span></p>
-  </section>
+      <section class="panel reveal" style="--i:2" aria-labelledby="import-title">
+        <div class="panel-head">
+          <div>
+            <h2 class="panel-title" id="import-title">Import</h2>
+            <p class="panel-desc">One link keeps every location in sync.</p>
+          </div>
+        </div>
+        <div class="seg" role="tablist" aria-label="Subscription format"><span class="seg-ind" aria-hidden="true"></span>{seg_btns}</div>
+        <div class="linkbox">{icon("link")}<span class="link-text" title="{esc(base)}">{link_display}</span></div>
+        <div class="actions">
+          <button class="btn btn--primary" type="button" data-action="copy-sub">
+            <span class="swap"><span>{icon("copy")}Copy link</span><span>{icon("check")}Copied</span></span>
+          </button>
+          <button class="btn btn--ghost" type="button" data-action="qr-sub">{icon("qr")}QR code</button>
+        </div>
+        <p class="hint">{icon("info")}<span id="format-hint">{esc(formats[0][4])}</span></p>
+      </section>
 
-  <section class="panel reveal" style="--i:3" aria-labelledby="configs-title">
-    <div class="panel-head">
-      <h2 class="panel-title" id="configs-title">Configs <span class="count">{len(configs)}</span></h2>
-      <button class="btn btn--ghost btn--sm" type="button" data-action="copy-all">
-        <span class="swap"><span>{icon("copy")}Copy all</span><span>{icon("check")}Copied</span></span>
-      </button>
+      <p class="rail-foot"><span class="foot-note">{icon("shield")}Keep this link private. Anyone with it can use this plan.</span></p>
     </div>
-    {filters}
-    {"".join(group_html)}
-  </section>
 
-  <footer class="foot reveal" style="--i:4">
-    <span class="foot-note">{icon("shield")}Keep this link private. Anyone with it can use this plan.</span>
-    <span>Powered by Voidz</span>
-  </footer>
+    <div class="stage">
+      <section class="panel reveal" style="--i:3" aria-labelledby="configs-title">
+        <div class="panel-head">
+          <h2 class="panel-title" id="configs-title">Configs <span class="count">{len(configs)}</span></h2>
+          <button class="btn btn--ghost btn--sm" type="button" data-action="copy-all">
+            <span class="swap"><span>{icon("copy")}Copy all</span><span>{icon("check")}Copied</span></span>
+          </button>
+        </div>
+        {filters}
+        <div class="cfg-groups">{"".join(group_html)}</div>
+      </section>
+
+      <footer class="foot reveal" style="--i:4">
+        <span class="foot-note foot-note--mobile">{icon("shield")}Keep this link private. Anyone with it can use this plan.</span>
+        <span>Powered by Voidz</span>
+      </footer>
+    </div>
+  </div>
 </main>
 
 <div class="sheet" id="sheet" role="dialog" aria-modal="true" aria-labelledby="sheet-title" aria-hidden="true">
