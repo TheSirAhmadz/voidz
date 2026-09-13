@@ -35,11 +35,11 @@ DEVICE_CHECK_INTERVAL = 5.0
 DEVICE_MIN_AGE_SECONDS = 20.0
 DEVICE_MIN_BYTES = 64 * 1024
 
-# Last allowed_ips tuple pushed to Core for each customer, so a tick only
-# PATCHes every region when the locked device set actually changed. A single
+# Last allowed_ips tuple pushed to Core, keyed by (customer_id, instance_id),
+# so a tick only PATCHes a region when its lock actually changed. A single
 # console process, so plain in-memory state is fine — a restart just means
-# the lock gets recomputed (and re-pushed) fresh on the next tick.
-_device_allowed_ips: dict[str, tuple[str, ...]] = {}
+# the locks get recomputed (and re-pushed) fresh on the next tick.
+_device_allowed_ips: dict[tuple[str, str], tuple[str, ...]] = {}
 
 
 def _utcnow() -> datetime:
@@ -163,23 +163,22 @@ async def set_customer_active(pool, plan_id: str, cred_uuid: str, active: bool) 
                 log.warning("set_active(%s) failed on %s/%s: %s", active, pi["instance_id"], proto, exc)
 
 
-async def _push_allowed_ips(pool, plan_id: str, cred_uuid: str, protocols: list[str],
+async def _push_allowed_ips(pool, instance_id: str, cred_uuid: str, protocols: list[str],
                              allowed_ips: list[str]) -> None:
-    """Push the cross-region device lock to every region's Core link. Empty
-    list clears the lock (falls back to each region's own local count)."""
-    for pi in await _plan_instances(pool, plan_id):
-        worker_url = await _instance_worker(pool, pi["instance_id"])
-        if not worker_url:
-            continue
-        for proto in protocols:
-            try:
-                await worker_svc.worker_call(
-                    worker_url, "PATCH",
-                    f"/worker/api/instances/{pi['instance_id']}/proxy/core/api/links/{_link_uuid(cred_uuid, proto)}",
-                    {"allowed_ips": allowed_ips},
-                )
-            except worker_svc.WorkerError as exc:
-                log.warning("push allowed_ips failed on %s/%s: %s", pi["instance_id"], proto, exc)
+    """Push the device lock to one region's Core link. Empty list clears the
+    lock, leaving that region to enforce the cap on its own connections."""
+    worker_url = await _instance_worker(pool, instance_id)
+    if not worker_url:
+        return
+    for proto in protocols:
+        try:
+            await worker_svc.worker_call(
+                worker_url, "PATCH",
+                f"/worker/api/instances/{instance_id}/proxy/core/api/links/{_link_uuid(cred_uuid, proto)}",
+                {"allowed_ips": allowed_ips},
+            )
+        except worker_svc.WorkerError as exc:
+            log.warning("push allowed_ips failed on %s/%s: %s", instance_id, proto, exc)
 
 
 async def patch_customer_links(pool, plan_id: str, cred_uuid: str, patch: dict) -> None:
@@ -237,44 +236,39 @@ async def _sum_usage(pool, plan_id: str, cred_uuid: str) -> int:
     return total
 
 
-async def _global_device_ips(pool, plan_id: str, cred_uuid: str, protocols: list[str]) -> dict[str, str]:
-    """Client IPs that are *actually in use* on this customer's link right
-    now, unioned across every region, mapped to the earliest
-    `first_connected_at` seen for that IP in any region.
+async def _established_by_region(pool, plan_id: str, cred_uuid: str,
+                                  protocols: list[str]) -> dict[str, str]:
+    """Regions where this customer is *actually using* the link right now,
+    mapped to the timestamp their earliest established connection started.
 
     Only established connections count. Proxy clients routinely probe every
     server in a subscription at once to measure latency, and a single device
     can leave those probes behind several different egress IPs (multi-homed
     ISPs, CGNAT pools and split tunnels pick a different exit per
-    destination). Counting those momentary probes would make one device look
-    like one-per-region and lock the customer out of every region but the
-    first — so an IP only counts once its connection has lasted
-    DEVICE_MIN_AGE_SECONDS or has moved DEVICE_MIN_BYTES of real traffic.
+    destination), so momentary probes must never look like extra devices.
     """
     wanted = ",".join(_link_uuid(cred_uuid, proto) for proto in protocols)
     now = _utcnow()
-    first_seen: dict[str, str] = {}
+    active: dict[str, str] = {}
     for pi in await _plan_instances(pool, plan_id):
-        worker_url = await _instance_worker(pool, pi["instance_id"])
+        instance_id = pi["instance_id"]
+        worker_url = await _instance_worker(pool, instance_id)
         if not worker_url:
             continue
         try:
             data = await worker_svc.worker_call(
                 worker_url, "GET",
-                f"/worker/api/instances/{pi['instance_id']}/proxy/core/api/connections?uuids={wanted}",
+                f"/worker/api/instances/{instance_id}/proxy/core/api/connections?uuids={wanted}",
             )
         except worker_svc.WorkerError:
             continue
         for conn in data.get("connections", []):
-            ip = conn.get("ip")
             ts = conn.get("first_connected_at") or ""
-            if not ip:
+            if not conn.get("ip") or not _is_established(ts, conn.get("bytes"), now):
                 continue
-            if not _is_established(ts, conn.get("bytes"), now):
-                continue
-            if ip not in first_seen or ts < first_seen[ip]:
-                first_seen[ip] = ts
-    return first_seen
+            if instance_id not in active or ts < active[instance_id]:
+                active[instance_id] = ts
+    return active
 
 
 def _is_established(first_connected_at: str, used_bytes, now: datetime) -> bool:
@@ -292,53 +286,61 @@ def _is_established(first_connected_at: str, used_bytes, now: datetime) -> bool:
 
 
 async def enforce_device_limits(pool) -> None:
-    """Fast-ticking pass: union a customer's live connections across every
-    region and lock their links to whichever IPs got there first, once the
-    device cap is reached. This is a whitelist, not an on/off switch — the
-    device(s) already holding a slot keep working everywhere, while any
-    other IP is rejected everywhere, not just on the region it tried. Runs
-    far more often than the byte/expiry reconcile because a new device
-    sneaking on is a now-problem, not a wait-a-minute one."""
+    """Fast-ticking pass: cap how many regions a customer can be *using* at
+    once, which is what a device cap means once a subscription spans several
+    regions.
+
+    Each region's Core already caps distinct client IPs on its own
+    connections, so two devices landing on the same region are handled
+    locally. What Core cannot see is a second device that picked a different
+    region — so this loop counts the regions carrying established traffic
+    and shuts the link inside whichever regions started last, leaving the
+    earliest one untouched.
+
+    Deliberately *not* a single global IP whitelist: one device reaches
+    different regions from different egress IPs, so a whitelist built from
+    one region's view locks that same device out of all the others.
+    """
     rows = await pool.fetch(
         "SELECT id, plan_id, cred_uuid, name, max_devices FROM customers "
         "WHERE active = TRUE AND max_devices > 0"
     )
-    seen_ids = set()
+    seen_keys = set()
     for c in rows:
-        seen_ids.add(c["id"])
         protocols = await _plan_protocols(pool, c["plan_id"])
         try:
-            first_seen = await _global_device_ips(pool, c["plan_id"], c["cred_uuid"], protocols)
+            active = await _established_by_region(pool, c["plan_id"], c["cred_uuid"], protocols)
         except Exception as exc:
             log.warning("device check failed for customer %s: %s", c["id"], exc)
             continue
-        max_devices = c["max_devices"]
-        if len(first_seen) >= max_devices:
-            # At/over capacity: lock to the earliest `max_devices` IPs so the
-            # device(s) already connected keep working and everyone else is
-            # rejected in every region, not just the one they tried.
-            ordered = sorted(first_seen, key=lambda ip: first_seen[ip])
-            desired = tuple(sorted(ordered[:max_devices]))
-        else:
-            # Under capacity: leave unlocked so a not-yet-seen device can
-            # still claim the remaining slot(s) in any region.
-            desired = ()
-        if _device_allowed_ips.get(c["id"], ()) != desired:
-            await _push_allowed_ips(pool, c["plan_id"], c["cred_uuid"], protocols, list(desired))
-            _device_allowed_ips[c["id"]] = desired
-            log.info("customer %s (%s) device lock -> %s (%d ips seen, cap %d)",
-                     c["name"], c["id"], desired or "(open)", len(first_seen), max_devices)
-    # Drop bookkeeping for customers that got disabled/deleted elsewhere in
-    # the meantime so the dict doesn't grow forever.
-    for cid in list(_device_allowed_ips):
-        if cid not in seen_ids:
-            del _device_allowed_ips[cid]
+        # Earliest-started regions keep the link; the rest are shut out.
+        winners = set(sorted(active, key=lambda iid: active[iid])[:c["max_devices"]])
+        for pi in await _plan_instances(pool, c["plan_id"]):
+            instance_id = pi["instance_id"]
+            key = (c["id"], instance_id)
+            seen_keys.add(key)
+            blocked = instance_id in active and instance_id not in winners
+            # A sentinel nobody can present: allowed_ips is a whitelist, so a
+            # list holding only an unroutable address rejects every client.
+            desired = ("0.0.0.0",) if blocked else ()
+            if _device_allowed_ips.get(key, ()) != desired:
+                await _push_allowed_ips(pool, instance_id, c["cred_uuid"], protocols, list(desired))
+                _device_allowed_ips[key] = desired
+                log.info("customer %s (%s) region %s -> %s (%d regions in use, cap %d)",
+                         c["name"], c["id"], pi["region_label"] or instance_id,
+                         "blocked" if blocked else "open", len(active), c["max_devices"])
+    # Drop bookkeeping for customers/regions that went away in the meantime
+    # so the dict doesn't grow forever.
+    for key in list(_device_allowed_ips):
+        if key not in seen_keys:
+            del _device_allowed_ips[key]
 
 
 def forget_device_lock(customer_id: str) -> None:
     """Drop cached device-lock state for a customer so the next tick
     recomputes it from scratch (e.g. after an admin changes max_devices)."""
-    _device_allowed_ips.pop(customer_id, None)
+    for key in [k for k in _device_allowed_ips if k[0] == customer_id]:
+        del _device_allowed_ips[key]
 
 
 async def device_enforce_loop() -> None:
