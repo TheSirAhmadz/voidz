@@ -262,17 +262,23 @@ async def _established_by_region(pool, plan_id: str, cred_uuid: str,
         instance_id = pi["instance_id"]
         worker_url = await _instance_worker(pool, instance_id)
         if not worker_url:
+            log.info("DIAG %s: no worker_url (instance not running?)", pi["region_label"])
             continue
         try:
             data = await worker_svc.worker_call(
                 worker_url, "GET",
                 f"/worker/api/instances/{instance_id}/proxy/core/api/connections?uuids={wanted}",
             )
-        except worker_svc.WorkerError:
+        except worker_svc.WorkerError as exc:
+            log.info("DIAG %s: worker_call failed: %s", pi["region_label"], exc)
             continue
+        log.info("DIAG %s: connections=%r", pi["region_label"], data.get("connections"))
         for conn in data.get("connections", []):
             ts = conn.get("first_connected_at") or ""
-            if not conn.get("ip") or not _is_established(ts, conn.get("bytes"), now):
+            established = _is_established(ts, conn.get("bytes"), now)
+            log.info("DIAG   conn ip=%s ts=%s bytes=%s established=%s",
+                     conn.get("ip"), ts, conn.get("bytes"), established)
+            if not conn.get("ip") or not established:
                 continue
             if instance_id not in active or ts < active[instance_id]:
                 active[instance_id] = ts
@@ -313,6 +319,7 @@ async def enforce_device_limits(pool) -> None:
         "SELECT id, plan_id, cred_uuid, name, max_devices FROM customers "
         "WHERE active = TRUE AND max_devices > 0"
     )
+    log.info("DIAG tick: %d capped customers", len(rows))
     seen_keys = set()
     for c in rows:
         protocols = await _plan_protocols(pool, c["plan_id"])
@@ -321,6 +328,7 @@ async def enforce_device_limits(pool) -> None:
         except Exception as exc:
             log.warning("device check failed for customer %s: %s", c["id"], exc)
             continue
+        log.info("DIAG customer %s: protocols=%r active=%r", c["name"], protocols, active)
         # Earliest-started regions keep the link; the rest are shut out.
         winners = set(sorted(active, key=lambda iid: active[iid])[:c["max_devices"]])
         for pi in await _plan_instances(pool, c["plan_id"]):
