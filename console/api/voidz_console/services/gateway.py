@@ -22,7 +22,7 @@ import asyncio
 import httpx
 import websockets
 from fastapi import APIRouter, HTTPException, Request, WebSocket, WebSocketDisconnect
-from fastapi.responses import Response, StreamingResponse
+from fastapi.responses import StreamingResponse
 
 from ..db import get_pool
 from ..logging import get
@@ -787,26 +787,19 @@ async def instance_http_gateway(token: str, path: str, request: Request):
 
     client = httpx.AsyncClient(timeout=None)
     try:
-        if request.method in ("GET", "HEAD", "OPTIONS"):
-            upstream_req = client.build_request(
-                request.method, url, headers=headers, params=None,
-            )
-            upstream_resp = await client.send(upstream_req, stream=True)
-            return StreamingResponse(
-                upstream_resp.aiter_raw(),
-                status_code=upstream_resp.status_code,
-                headers={k: v for k, v in upstream_resp.headers.items()
-                         if k.lower() not in HOP_BY_HOP},
-                background=_close_client(client, upstream_resp),
-            )
-
-        body = await request.body()
-        upstream_resp = await client.request(request.method, url, headers=headers, content=body)
-        return Response(
-            content=upstream_resp.content,
+        # Stream both ways. An xHTTP stream-up upload never ends while the
+        # session lives, so buffering the request body here would hang it;
+        # xHTTP downlinks are equally open-ended in the other direction.
+        upstream_req = client.build_request(
+            request.method, url, headers=headers, content=request.stream(),
+        )
+        upstream_resp = await client.send(upstream_req, stream=True)
+        return StreamingResponse(
+            upstream_resp.aiter_raw(),
             status_code=upstream_resp.status_code,
             headers={k: v for k, v in upstream_resp.headers.items()
                      if k.lower() not in HOP_BY_HOP},
+            background=_close_client(client, upstream_resp),
         )
     except httpx.HTTPError:
         raise HTTPException(status_code=502, detail="instance upstream unavailable")

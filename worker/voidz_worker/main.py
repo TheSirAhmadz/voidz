@@ -262,8 +262,10 @@ async def _forward_http(instance_id: str, path: str, request: Request):
     handle = driver.handles.get(instance_id)
     if handle is not None and handle.meta.get("api_token"):
         headers.append(("Authorization", f"Bearer {handle.meta['api_token']}"))
-    # Stream responses: xHTTP downlinks are long-lived streams that never
-    # "complete" — buffering them (client.request) would hang and die.
+    # Stream both directions: xHTTP downlinks are long-lived streams that
+    # never "complete", and an xHTTP stream-up *upload* stays open for the
+    # whole session — reading it to the end first (await request.body())
+    # would park the request here forever and the client would just time out.
     client = httpx.AsyncClient(
         base_url=f"http://127.0.0.1:{port}",
         timeout=httpx.Timeout(connect=10.0, read=None, write=None, pool=None),
@@ -271,7 +273,7 @@ async def _forward_http(instance_id: str, path: str, request: Request):
     try:
         up_req = client.build_request(
             request.method, url, headers=headers,
-            content=await request.body(),
+            content=request.stream(),
         )
         upstream = await client.send(up_req, stream=True)
         from starlette.background import BackgroundTask
