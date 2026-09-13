@@ -737,6 +737,7 @@ function viewPlanDetail(planId){
           '<button class="btn sm" data-act="extend">+30d</button>'+
           '<button class="btn sm" data-act="devices">Devices</button>'+
           '<button class="btn sm" data-act="reset">Reset</button>'+
+          '<button class="btn sm" data-act="repro">Repair</button>'+
           '<button class="btn sm" data-act="toggle">'+(c.active?"Disable":"Enable")+"</button>"+
           '<button class="btn sm dng" data-act="del">Revoke</button>'+
           "</div></td></tr>";
@@ -768,6 +769,10 @@ function viewPlanDetail(planId){
         if(act==="reset"){
           if(!confirm("Reset usage back to zero for "+cust.name+"?"))return;
           api("PATCH","/api/plans/"+planId+"/customers/"+cid,{reset_usage:true}).then(function(){toast("Usage reset","ok");load()}).catch(function(e){toast(e.message,"err")});
+          return;
+        }
+        if(act==="repro"){
+          api("POST","/api/plans/"+planId+"/customers/"+cid+"/reprovision").then(function(){toast("Links rebuilt in every region — same URL","ok",3500);load()}).catch(function(e){toast(e.message,"err")});
           return;
         }
         if(act==="toggle"){

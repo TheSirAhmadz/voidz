@@ -254,6 +254,37 @@ async def update_customer(plan_id: str, customer_id: str, request: Request,
     return _customer_out(row)
 
 
+@router.post("/plans/{plan_id}/customers/{customer_id}/reprovision")
+async def reprovision_customer(plan_id: str, customer_id: str, request: Request,
+                               user: asyncpg.Record = Depends(current_user)):
+    """Re-push this customer's credentials to every region in the plan.
+
+    A region's Core keeps its links in memory, so anything that restarts it
+    (a redeploy, moving the instance to another worker) leaves the customer
+    with no link there. Recreating the customer would fix it but hands out a
+    new subscription URL, breaking the link already given to them — this
+    rebuilds the links behind the existing URL instead.
+    """
+    pool = get_pool(request)
+    plan = await owned_plan(pool, user["id"], plan_id)
+    cust = await pool.fetchrow(
+        "SELECT * FROM customers WHERE id = $1 AND plan_id = $2", customer_id, plan_id
+    )
+    if cust is None:
+        raise HTTPException(status_code=404, detail="customer not found")
+    await quota_svc.provision_customer_links(pool, plan, {
+        "cred_uuid": cust["cred_uuid"],
+        "name": cust["name"],
+        "active": bool(cust["active"]),
+        "expires_at": cust["expires_at"].isoformat() if cust["expires_at"] else None,
+        "ss_cipher": cust["ss_cipher"],
+        "ss_password": cust["ss_password"],
+        "max_devices": cust["max_devices"],
+    })
+    quota_svc.forget_device_lock(customer_id)
+    return {"ok": True, "sub_token": cust["sub_token"]}
+
+
 @router.delete("/plans/{plan_id}/customers/{customer_id}")
 async def delete_customer(plan_id: str, customer_id: str, request: Request,
                           user: asyncpg.Record = Depends(current_user)):
