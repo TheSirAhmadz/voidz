@@ -244,16 +244,18 @@ async def _sum_usage(pool, plan_id: str, cred_uuid: str) -> int:
     return total
 
 
-async def _established_by_region(pool, plan_id: str, cred_uuid: str,
-                                  protocols: list[str]) -> dict[str, str]:
-    """Regions where this customer is *actually using* the link right now,
-    mapped to the timestamp their earliest established connection started.
+async def _established_ips(pool, plan_id: str, cred_uuid: str,
+                            protocols: list[str]) -> dict[str, str]:
+    """Every IP with a currently established connection to this customer's
+    link, pooled across every region, mapped to the timestamp its earliest
+    connection started.
 
-    Only established connections count. Proxy clients routinely probe every
-    server in a subscription at once to measure latency, and a single device
-    can leave those probes behind several different egress IPs (multi-homed
-    ISPs, CGNAT pools and split tunnels pick a different exit per
-    destination), so momentary probes must never look like extra devices.
+    Pooled by IP rather than kept per region: a subscription spans several
+    regions on purpose (clients pick whichever is fastest, and proxy apps
+    routinely ping every region in the plan at once to show latency), so one
+    real device looking "active" in more than one region at the same time is
+    normal, expected behaviour, not a second device. Only established
+    connections count at all, so a momentary probe never contributes either.
     """
     wanted = ",".join(_link_uuid(cred_uuid, proto) for proto in protocols)
     now = _utcnow()
@@ -262,26 +264,21 @@ async def _established_by_region(pool, plan_id: str, cred_uuid: str,
         instance_id = pi["instance_id"]
         worker_url = await _instance_worker(pool, instance_id)
         if not worker_url:
-            log.info("DIAG %s: no worker_url (instance not running?)", pi["region_label"])
             continue
         try:
             data = await worker_svc.worker_call(
                 worker_url, "GET",
                 f"/worker/api/instances/{instance_id}/proxy/core/api/connections?uuids={wanted}",
             )
-        except worker_svc.WorkerError as exc:
-            log.info("DIAG %s: worker_call failed: %s", pi["region_label"], exc)
+        except worker_svc.WorkerError:
             continue
-        log.info("DIAG %s: connections=%r", pi["region_label"], data.get("connections"))
         for conn in data.get("connections", []):
+            ip = conn.get("ip")
             ts = conn.get("first_connected_at") or ""
-            established = _is_established(ts, conn.get("bytes"), now)
-            log.info("DIAG   conn ip=%s ts=%s bytes=%s established=%s",
-                     conn.get("ip"), ts, conn.get("bytes"), established)
-            if not conn.get("ip") or not established:
+            if not ip or not _is_established(ts, conn.get("bytes"), now):
                 continue
-            if instance_id not in active or ts < active[instance_id]:
-                active[instance_id] = ts
+            if ip not in active or ts < active[ip]:
+                active[ip] = ts
     return active
 
 
@@ -300,51 +297,60 @@ def _is_established(first_connected_at: str, used_bytes, now: datetime) -> bool:
 
 
 async def enforce_device_limits(pool) -> None:
-    """Fast-ticking pass: cap how many regions a customer can be *using* at
-    once, which is what a device cap means once a subscription spans several
-    regions.
+    """Fast-ticking pass: cap how many distinct devices (client IPs) can hold
+    an established connection to a customer's link at once, pooled across
+    every region in the plan.
 
     Each region's Core already caps distinct client IPs on its own
-    connections, so two devices landing on the same region are handled
-    locally. What Core cannot see is a second device that picked a different
-    region — so this loop counts the regions carrying established traffic
-    and shuts the link inside whichever regions started last, leaving the
-    earliest one untouched.
+    connections, so two devices landing on the *same* region are handled
+    locally without any help from here. What local enforcement cannot see is
+    a second device that picked a *different* region — that is what this
+    loop is for.
 
-    Deliberately *not* a single global IP whitelist: one device reaches
-    different regions from different egress IPs, so a whitelist built from
-    one region's view locks that same device out of all the others.
+    The winning IPs (earliest-seen first, up to the cap) are pushed as an
+    allow-list to *every* region's link, not just whichever region an extra
+    device tried: the same device then keeps working no matter which region
+    it is currently measured from, and any additional IP beyond the cap is
+    rejected everywhere via the same allow-list check Core already runs
+    locally at connect time.
     """
     rows = await pool.fetch(
         "SELECT id, plan_id, cred_uuid, name, max_devices FROM customers "
         "WHERE active = TRUE AND max_devices > 0"
     )
-    log.info("DIAG tick: %d capped customers", len(rows))
     seen_keys = set()
     for c in rows:
         protocols = await _plan_protocols(pool, c["plan_id"])
+        if not protocols:
+            continue
         try:
-            active = await _established_by_region(pool, c["plan_id"], c["cred_uuid"], protocols)
+            active_ips = await _established_ips(pool, c["plan_id"], c["cred_uuid"], protocols)
         except Exception as exc:
             log.warning("device check failed for customer %s: %s", c["id"], exc)
             continue
-        log.info("DIAG customer %s: protocols=%r active=%r", c["name"], protocols, active)
-        # Earliest-started regions keep the link; the rest are shut out.
-        winners = set(sorted(active, key=lambda iid: active[iid])[:c["max_devices"]])
+        # Only step in once there are genuinely more devices than the cap
+        # allows: Core's own allow-list check ignores max_devices entirely
+        # once *any* list is pushed (it becomes a pure whitelist), so
+        # locking down at or under the cap would permanently block a
+        # legitimate device that just hasn't connected yet — it would never
+        # get the chance to be seen and added to the list. Below the cap,
+        # leaving every region's allow-list empty lets Core's own local,
+        # per-region IP counting admit new devices as normal.
+        if len(active_ips) <= c["max_devices"]:
+            desired: tuple[str, ...] = ()
+        else:
+            winners = sorted(active_ips, key=lambda ip: active_ips[ip])[:c["max_devices"]]
+            desired = tuple(sorted(winners))
         for pi in await _plan_instances(pool, c["plan_id"]):
             instance_id = pi["instance_id"]
             key = (c["id"], instance_id)
             seen_keys.add(key)
-            blocked = instance_id in active and instance_id not in winners
-            # A sentinel nobody can present: allowed_ips is a whitelist, so a
-            # list holding only an unroutable address rejects every client.
-            desired = ("0.0.0.0",) if blocked else ()
             if _device_allowed_ips.get(key, ()) != desired:
                 await _push_allowed_ips(pool, instance_id, c["cred_uuid"], protocols, list(desired))
                 _device_allowed_ips[key] = desired
-                log.info("customer %s (%s) region %s -> %s (%d regions in use, cap %d)",
+                log.info("customer %s (%s) region %s -> allowed_ips=%s (%d devices seen, cap %d)",
                          c["name"], c["id"], pi["region_label"] or instance_id,
-                         "blocked" if blocked else "open", len(active), c["max_devices"])
+                         list(desired) or "(open)", len(active_ips), c["max_devices"])
     # Drop bookkeeping for customers/regions that went away in the meantime
     # so the dict doesn't grow forever.
     for key in list(_device_allowed_ips):
