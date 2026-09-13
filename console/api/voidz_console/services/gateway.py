@@ -100,16 +100,19 @@ def _sub_html_page(title: str, configs: list, host: str, sub_path: str,
     for i, c in enumerate(configs):
         pname, transport, color = PROTO_META.get(c["protocol"], (c["protocol"], "", "#6f9bff"))
         qr = qr_svg(c["share_url"])
-        region_chip = f'<span class="chip" style="margin-right:5px">{esc(c["region"])}</span>' if c.get("region") else ""
+        region_chip = f'<span class="chip chip-region">{esc(c["region"])}</span>' if c.get("region") else ""
         cards += f'''
-        <div class="cfg" style="--pc:{color}">
-          <div class="ch"><div><span class="pn">{esc(pname)}</span><span class="tr">{esc(transport)}</span></div><div>{region_chip}<span class="chip">{esc(c["protocol"])}</span></div></div>
+        <div class="cfg" style="--pc:{color};--d:{i}">
+          <div class="ch">
+            <div class="ch-l"><span class="dot-proto"></span><div><span class="pn">{esc(pname)}</span><span class="tr">{esc(transport)}</span></div></div>
+            <div class="ch-r">{region_chip}<span class="chip">{esc(c["protocol"])}</span></div>
+          </div>
           <div class="u" id="u{i}">{esc(c["share_url"])}</div>
           <div class="row">
-            <button onclick="cp(\'u{i}\')">Copy <span class="en">config</span><span class="fa" hidden>کانفیگ</span></button>
-            <button class="g" onclick="tg(\'q{i}\',this)">QR</button>
+            <button class="btn-copy" onclick="cp(\'u{i}\',this)"><span class="ic ic-copy"></span><span class="en">Copy config</span><span class="fa" hidden>کپی کانفیگ</span></button>
+            <button class="g btn-qr" onclick="tg(\'q{i}\',this)"><span class="ic ic-qr"></span>QR</button>
           </div>
-          <div class="qr" id="q{i}">{qr}</div>
+          <div class="qr" id="q{i}"><div class="qr-in">{qr}</div></div>
         </div>'''
 
     sub_url = f"https://{host}{sub_path}"
@@ -169,65 +172,122 @@ def _sub_html_page(title: str, configs: list, host: str, sub_path: str,
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>{esc(title)}</title>
 <style>
+:root{{
+  --bg:#050709;--ink:#eef3f8;--ink-dim:#93a3b8;--ink-faint:#5c6b80;
+  --line:rgba(163,186,214,.14);--line-soft:rgba(163,186,214,.09);
+  --glass:rgba(19,24,34,.55);
+  --teal:#35d7dc;--violet:#8b7bff;--grad:linear-gradient(135deg,var(--teal),var(--violet));
+  --ease:cubic-bezier(.22,1,.36,1);--ease-spring:cubic-bezier(.34,1.56,.64,1);
+}}
 *{{box-sizing:border-box}}
-body{{background:#05070a;color:#eaf1f7;font-family:-apple-system,'Segoe UI',Roboto,'Vazirmatn',sans-serif;margin:0;padding:0 14px 70px;
-background-image:radial-gradient(1000px 460px at 50% -140px,rgba(56,214,217,.16),transparent),radial-gradient(700px 300px at 85% 110%,rgba(139,123,255,.14),transparent)}}
-.w{{max-width:600px;margin:0 auto}}
-.top{{display:flex;align-items:center;gap:11px;padding:26px 4px 4px}}
-.moon{{width:34px;height:34px;object-fit:contain;filter:drop-shadow(0 0 8px rgba(56,214,217,.55))}}
-h1{{font-size:22px;margin:0;letter-spacing:.3px;font-weight:750}}
-.sub2{{color:#9fb0c3;font-size:12.5px}}
-.hero{{text-align:center;padding:10px 0 22px}}
-.hero h2{{margin:0 0 6px;font-size:17px}}
-.hero p{{margin:0;color:#9fb0c3;font-size:13px}}
-.card{{background:rgba(20,26,37,.6);backdrop-filter:blur(18px);border:1px solid rgba(148,175,199,.16);border-radius:16px;padding:17px;margin-bottom:14px;box-shadow:0 16px 36px rgba(0,0,0,.4)}}
-.card h3{{margin:0 0 4px;font-size:14px}}
-.lbl{{color:#9fb0c3;font-size:12.5px;margin:0 0 10px}}
-.subu{{display:flex;gap:8px;align-items:stretch}}
-.subu .u{{flex:1;font-family:ui-monospace,monospace;font-size:11px;background:rgba(0,0,0,.25);border:1px solid rgba(148,175,199,.16);border-radius:8px;padding:9px 10px;word-break:break-all}}
-.btn{{padding:8px 14px;border-radius:8px;border:none;background:linear-gradient(135deg,#35d7dc,#8b7bff);color:#04141a;font-weight:700;font-size:12.5px;cursor:pointer;box-shadow:0 6px 18px -6px rgba(56,214,217,.5)}}
-.btn.g{{background:rgba(255,255,255,.06);color:#eaf1f7;box-shadow:none;border:1px solid rgba(148,175,199,.2)}}
-.fmts{{display:flex;gap:7px;flex-wrap:wrap;margin-top:10px}}
-.fmt{{font-size:11px;color:#9fb0c3;border:1px solid rgba(148,175,199,.2);border-radius:999px;padding:3px 11px;text-decoration:none}}
-.fmt:hover{{color:#eaf1f7;border-color:rgba(56,214,217,.4)}}
-.cfg{{background:rgba(255,255,255,.03);border:1px solid rgba(148,175,199,.16);border-left:3px solid var(--pc);border-radius:12px;padding:13px 14px;margin-bottom:11px}}
-.ch{{display:flex;justify-content:space-between;align-items:center;gap:8px}}
-.pn{{font-weight:700;font-size:13.5px}}
-.tr{{color:#5c6b80;font-size:11px;margin-left:7px}}
-.chip{{font-size:10px;color:#7ce8ea;border:1px solid rgba(56,214,217,.35);background:rgba(56,214,217,.08);border-radius:999px;padding:1px 8px;font-family:monospace}}
-.u{{font-family:ui-monospace,monospace;font-size:10.5px;color:#9fb0c3;background:rgba(0,0,0,.25);border:1px solid rgba(148,175,199,.16);border-radius:8px;padding:7px 9px;margin:9px 0;word-break:break-all;max-height:64px;overflow:auto}}
-.row{{display:flex;gap:7px}}
-.qr{{display:none;margin-top:11px;text-align:center}}
-.qr svg{{width:216px;height:216px;background:#fff;border-radius:10px}}
-.apps{{display:flex;flex-wrap:wrap;gap:7px;margin-top:9px}}
-.apps a{{font-size:11.5px;color:#7ce8ea;text-decoration:none;border:1px solid rgba(148,175,199,.2);border-radius:999px;padding:4px 12px}}
-.apps a:hover{{border-color:#35d7dc}}
-.ft{{text-align:center;color:#5c6b80;font-size:11.5px;margin-top:26px}}
-.ft a{{color:#7ce8ea;text-decoration:none}}
+::selection{{background:rgba(56,214,217,.3);color:#fff}}
+@media (prefers-reduced-motion:reduce){{*{{animation-duration:.001ms!important;animation-iteration-count:1!important;transition-duration:.001ms!important}}}}
+body{{background:var(--bg);color:var(--ink);font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Vazirmatn',sans-serif;margin:0;padding:0 16px 80px;
+  position:relative;overflow-x:hidden;-webkit-font-smoothing:antialiased}}
+.bg-orb{{position:fixed;border-radius:50%;filter:blur(70px);pointer-events:none;z-index:0;opacity:.55;will-change:transform}}
+.bg-orb.o1{{width:520px;height:520px;top:-260px;left:50%;transform:translateX(-50%);background:radial-gradient(circle,rgba(56,214,217,.35),transparent 70%);animation:drift1 22s ease-in-out infinite}}
+.bg-orb.o2{{width:420px;height:420px;bottom:-180px;right:-120px;background:radial-gradient(circle,rgba(139,123,255,.3),transparent 70%);animation:drift2 26s ease-in-out infinite}}
+@keyframes drift1{{0%,100%{{transform:translate(-50%,0) scale(1)}}50%{{transform:translate(-46%,26px) scale(1.06)}}}}
+@keyframes drift2{{0%,100%{{transform:translate(0,0) scale(1)}}50%{{transform:translate(-18px,-22px) scale(1.08)}}}}
+.w{{max-width:600px;margin:0 auto;position:relative;z-index:1}}
+.top{{display:flex;align-items:center;gap:12px;padding:30px 2px 6px;opacity:0;animation:rise .6s var(--ease) .05s forwards}}
+.moon{{width:36px;height:36px;object-fit:contain;filter:drop-shadow(0 0 10px rgba(56,214,217,.55));animation:float 5s ease-in-out infinite}}
+@keyframes float{{0%,100%{{transform:translateY(0)}}50%{{transform:translateY(-4px)}}}}
+h1{{font-size:21px;margin:0;letter-spacing:-.2px;font-weight:800}}
+.sub2{{color:var(--ink-dim);font-size:12.5px;margin-top:1px}}
+.hero{{text-align:center;padding:22px 0 24px;opacity:0;animation:rise .6s var(--ease) .12s forwards}}
+.hero h2{{margin:0 0 7px;font-size:19px;font-weight:800;letter-spacing:-.3px}}
+.hero p{{margin:0;color:var(--ink-dim);font-size:13.5px;line-height:1.5}}
+.card{{background:var(--glass);backdrop-filter:blur(22px) saturate(140%);-webkit-backdrop-filter:blur(22px) saturate(140%);
+  border:1px solid var(--line);border-radius:20px;padding:19px;margin-bottom:15px;
+  box-shadow:0 20px 50px -12px rgba(0,0,0,.55),inset 0 1px 0 rgba(255,255,255,.04);
+  opacity:0;animation:rise .6s var(--ease) forwards;transition:border-color .25s,transform .25s}}
+.card:hover{{border-color:rgba(163,186,214,.24)}}
+.card h3{{margin:0 0 4px;font-size:14.5px;font-weight:700;letter-spacing:-.1px}}
+.lbl{{color:var(--ink-dim);font-size:12.5px;margin:0 0 12px;line-height:1.5}}
+.subu{{display:flex;gap:9px;align-items:stretch}}
+.subu .u{{flex:1;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px;background:rgba(0,0,0,.28);
+  border:1px solid var(--line);border-radius:10px;padding:10px 11px;word-break:break-all;color:var(--ink-dim);
+  display:flex;align-items:center}}
+.btn{{padding:0 18px;height:40px;border-radius:10px;border:none;background:var(--grad);color:#03141a;font-weight:800;
+  font-size:12.5px;cursor:pointer;box-shadow:0 8px 20px -6px rgba(56,214,217,.45);white-space:nowrap;
+  display:inline-flex;align-items:center;gap:6px;transition:transform .18s var(--ease-spring),box-shadow .18s}}
+.btn:active{{transform:scale(.96)}}
+.btn:hover{{box-shadow:0 10px 26px -6px rgba(56,214,217,.6)}}
+.btn.g{{background:rgba(255,255,255,.06);color:var(--ink);box-shadow:none;border:1px solid var(--line)}}
+.btn.g:hover{{border-color:rgba(56,214,217,.4);background:rgba(255,255,255,.09)}}
+.fmts{{display:flex;gap:7px;flex-wrap:wrap;margin-top:12px}}
+.fmt{{font-size:11px;color:var(--ink-dim);border:1px solid var(--line);border-radius:999px;padding:5px 13px;
+  text-decoration:none;transition:all .2s var(--ease)}}
+.fmt:hover{{color:var(--ink);border-color:rgba(56,214,217,.45);background:rgba(56,214,217,.06);transform:translateY(-1px)}}
+.cfg{{background:rgba(255,255,255,.025);border:1px solid var(--line-soft);border-radius:16px;padding:15px 16px;margin-bottom:11px;
+  position:relative;overflow:hidden;opacity:0;animation:rise .5s var(--ease) forwards;
+  animation-delay:calc(.32s + var(--d) * .07s);transition:border-color .25s,transform .2s}}
+.cfg::before{{content:'';position:absolute;left:0;top:10px;bottom:10px;width:3px;border-radius:3px;background:var(--pc);
+  box-shadow:0 0 12px 1px var(--pc)}}
+.cfg:hover{{border-color:rgba(163,186,214,.22);transform:translateY(-1px)}}
+.ch{{display:flex;justify-content:space-between;align-items:center;gap:8px;padding-left:6px}}
+.ch-l{{display:flex;align-items:center;gap:9px}}
+.dot-proto{{width:8px;height:8px;border-radius:50%;background:var(--pc);box-shadow:0 0 8px 1px var(--pc);flex:none}}
+.pn{{font-weight:800;font-size:13.5px;letter-spacing:-.1px}}
+.tr{{color:var(--ink-faint);font-size:11px;margin-left:7px;font-weight:500}}
+.ch-r{{display:flex;gap:6px}}
+.chip{{font-size:9.5px;color:#7ce8ea;border:1px solid rgba(56,214,217,.32);background:rgba(56,214,217,.08);
+  border-radius:999px;padding:2px 9px;font-family:ui-monospace,monospace;font-weight:600;letter-spacing:.2px}}
+.chip-region{{color:#c8b8ff;border-color:rgba(139,123,255,.35);background:rgba(139,123,255,.1)}}
+.u{{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:10.5px;color:var(--ink-dim);
+  background:rgba(0,0,0,.28);border:1px solid var(--line-soft);border-radius:10px;padding:9px 10px;margin:11px 0;
+  word-break:break-all;max-height:60px;overflow:auto}}
+.row{{display:flex;gap:8px}}
+.btn-copy,.btn-qr{{display:inline-flex;align-items:center;gap:6px}}
+.ic{{width:13px;height:13px;display:inline-block;flex:none;background:currentColor}}
+.ic-copy{{-webkit-mask:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.4'%3E%3Crect x='9' y='9' width='12' height='12' rx='2'/%3E%3Cpath d='M5 15V5a2 2 0 0 1 2-2h10'/%3E%3C/svg%3E") center/contain no-repeat;
+  mask:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.4'%3E%3Crect x='9' y='9' width='12' height='12' rx='2'/%3E%3Cpath d='M5 15V5a2 2 0 0 1 2-2h10'/%3E%3C/svg%3E") center/contain no-repeat}}
+.ic-qr{{-webkit-mask:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.4'%3E%3Crect x='3' y='3' width='7' height='7'/%3E%3Crect x='14' y='3' width='7' height='7'/%3E%3Crect x='3' y='14' width='7' height='7'/%3E%3Cpath d='M14 14h3v3h-3zM20 14v3M14 20h3M20 20v.01'/%3E%3C/svg%3E") center/contain no-repeat;
+  mask:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.4'%3E%3Crect x='3' y='3' width='7' height='7'/%3E%3Crect x='14' y='3' width='7' height='7'/%3E%3Crect x='3' y='14' width='7' height='7'/%3E%3Cpath d='M14 14h3v3h-3zM20 14v3M14 20h3M20 20v.01'/%3E%3C/svg%3E") center/contain no-repeat}}
+.qr{{display:grid;grid-template-rows:0fr;opacity:0;transition:grid-template-rows .45s var(--ease),opacity .35s var(--ease),margin-top .45s var(--ease)}}
+.qr.open{{grid-template-rows:1fr;opacity:1;margin-top:13px}}
+.qr-in{{overflow:hidden;text-align:center}}
+.qr-in svg{{width:200px;height:200px;background:#fff;border-radius:14px;padding:8px;box-shadow:0 12px 30px -8px rgba(0,0,0,.5)}}
+.ft{{text-align:center;color:var(--ink-faint);font-size:11.5px;margin-top:28px;opacity:0;animation:rise .6s var(--ease) .5s forwards}}
+.ft b{{color:var(--ink-dim);font-weight:700}}
 .fa{{display:none}}
+body.fa{{direction:rtl}}
 body.fa .en{{display:none}}
 body.fa .fa{{display:inline}}
-#lang{{position:fixed;top:14px;right:14px;z-index:9;background:rgba(20,26,37,.7);backdrop-filter:blur(12px);border:1px solid rgba(148,175,199,.2);color:#9fb0c3;border-radius:999px;padding:4px 12px;font-size:11px;cursor:pointer}}
-.stat-card{{padding:20px 14px}}
+.stat-card{{padding:22px 16px}}
 .stats{{display:flex;justify-content:space-around;align-items:center;gap:6px;flex-wrap:wrap}}
-.stat{{display:flex;flex-direction:column;align-items:center;gap:8px;min-width:92px}}
-.ring-wrap{{position:relative;width:96px;height:96px}}
-.ring{{width:96px;height:96px;transform:rotate(-90deg)}}
-.ring-bg{{fill:none;stroke:rgba(148,175,199,.16);stroke-width:8}}
-.ring-fg{{fill:none;stroke-width:8;stroke-linecap:round;transition:stroke-dashoffset 1.1s cubic-bezier(.22,.9,.35,1)}}
-.ring-mid{{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;text-align:center;font-size:12.5px;font-weight:700;line-height:1.2;padding:0 6px}}
-.ring-mid .sm{{display:block;font-weight:500;color:#9fb0c3;font-size:10px}}
-.big-num{{font-size:34px;font-weight:800;line-height:1;background:linear-gradient(135deg,#35d7dc,#8b7bff);-webkit-background-clip:text;background-clip:text;color:transparent;animation:pop .5s cubic-bezier(.22,.9,.35,1)}}
-.stat-lbl{{font-size:11.5px;color:#9fb0c3;text-align:center}}
-.stat-lbl .sm{{color:#6b7a8f;font-size:10px}}
-.dev-pill{{display:flex;align-items:center;gap:7px;font-size:15px;font-weight:700;padding:9px 16px;border-radius:999px;border:1px solid rgba(148,175,199,.2);background:rgba(255,255,255,.03)}}
-.dev-pill.on{{border-color:rgba(78,203,149,.5);color:#4ecb95}}
-.dev-pill.off{{color:#9fb0c3}}
-.dot{{width:8px;height:8px;border-radius:50%;background:#5c6b80;flex:none}}
+.stat{{display:flex;flex-direction:column;align-items:center;gap:9px;min-width:92px}}
+.ring-wrap{{position:relative;width:98px;height:98px}}
+.ring{{width:98px;height:98px;transform:rotate(-90deg)}}
+.ring-bg{{fill:none;stroke:rgba(163,186,214,.14);stroke-width:7}}
+.ring-fg{{fill:none;stroke-width:7;stroke-linecap:round;transition:stroke-dashoffset 1.3s cubic-bezier(.22,1,.36,1) .3s}}
+.ring-mid{{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;text-align:center;
+  font-size:12.5px;font-weight:800;line-height:1.2;padding:0 6px}}
+.ring-mid .sm{{display:block;font-weight:500;color:var(--ink-dim);font-size:10px;margin-top:1px}}
+.big-num{{font-size:36px;font-weight:800;line-height:1;background:var(--grad);-webkit-background-clip:text;
+  background-clip:text;color:transparent;animation:pop .55s var(--ease-spring) .2s backwards}}
+.stat-lbl{{font-size:11.5px;color:var(--ink-dim);text-align:center;font-weight:500}}
+.stat-lbl .sm{{color:var(--ink-faint);font-size:10px}}
+.dev-pill{{display:flex;align-items:center;gap:8px;font-size:15px;font-weight:800;padding:10px 18px;border-radius:999px;
+  border:1px solid var(--line);background:rgba(255,255,255,.03);transition:all .3s}}
+.dev-pill.on{{border-color:rgba(78,203,149,.5);color:#4ecb95;background:rgba(78,203,149,.06)}}
+.dev-pill.off{{color:var(--ink-dim)}}
+.dot{{width:8px;height:8px;border-radius:50%;background:var(--ink-faint);flex:none}}
 .dev-pill.on .dot{{background:#4ecb95;box-shadow:0 0 0 rgba(78,203,149,.6);animation:pulse 1.8s infinite}}
 @keyframes pulse{{0%{{box-shadow:0 0 0 0 rgba(78,203,149,.55)}}70%{{box-shadow:0 0 0 9px rgba(78,203,149,0)}}100%{{box-shadow:0 0 0 0 rgba(78,203,149,0)}}}}
-@keyframes pop{{0%{{transform:scale(.7);opacity:0}}100%{{transform:scale(1);opacity:1}}}}
+@keyframes pop{{0%{{transform:scale(.6);opacity:0}}100%{{transform:scale(1);opacity:1}}}}
+@keyframes rise{{from{{opacity:0;transform:translateY(14px)}}to{{opacity:1;transform:translateY(0)}}}}
+.toast{{position:fixed;bottom:26px;left:50%;transform:translateX(-50%) translateY(20px);background:#12161f;
+  border:1px solid rgba(78,203,149,.35);color:#6fe3ac;padding:10px 20px;border-radius:999px;font-size:13px;
+  font-weight:600;z-index:99;opacity:0;transition:all .35s var(--ease-spring);pointer-events:none;
+  box-shadow:0 12px 30px -8px rgba(0,0,0,.6);display:flex;align-items:center;gap:7px}}
+.toast.show{{opacity:1;transform:translateX(-50%) translateY(0)}}
+.ic-ok{{width:14px;height:14px;background:currentColor;
+  -webkit-mask:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='3'%3E%3Cpath d='M20 6 9 17l-5-5'/%3E%3C/svg%3E") center/contain no-repeat;
+  mask:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='3'%3E%3Cpath d='M20 6 9 17l-5-5'/%3E%3C/svg%3E") center/contain no-repeat}}
 </style></head><body>
+<div class="bg-orb o1"></div><div class="bg-orb o2"></div>
 <div class="w">
 <div class="top"><img class="moon" src="data:image/png;base64,{_LOGO_B64}" alt="Voidz">
 <div><h1>Voidz</h1><div class="sub2">{esc(title)}</div></div></div>
@@ -235,26 +295,42 @@ body.fa .fa{{display:inline}}
 <p class="en">Import the subscription into your client, or copy each config individually.</p>
 <p class="fa" hidden>سابسکریپشن را وارد کلاینت کنید یا هر کانفیگ را جدا کپی کنید.</p></div>
 {info_card}
-<div class="card">
+<div class="card" style="animation-delay:.2s">
 <h3 class="en">Subscription — all protocols</h3><h3 class="fa" hidden>سابسکریپشن — همه پروتکل‌ها</h3>
 <p class="lbl en">One URL, every config, auto-updates. Add it under Subscriptions in your client.</p>
 <p class="lbl fa" hidden>یک لینک برای همه کانفیگ‌ها — در بخش Subscriptions اپ وارد کنید.</p>
-<div class="subu"><div class="u" id="subu">{esc(sub_url)}</div><button class="btn" onclick="cp('subu')"><span class="en">Copy</span><span class="fa" hidden>کپی</span></button></div>
+<div class="subu"><div class="u" id="subu">{esc(sub_url)}</div><button class="btn" onclick="cp('subu',this)"><span class="ic ic-copy"></span><span class="en">Copy</span><span class="fa" hidden>کپی</span></button></div>
 <div class="fmts">
 <a class="fmt" href="{esc(sb_url)}" target="_blank" rel="noopener">sing-box JSON</a>
 <a class="fmt" href="{esc(cl_url)}" target="_blank" rel="noopener">Clash Meta YAML</a>
 <a class="fmt" href="{esc(sub_url)}" target="_blank" rel="noopener">v2ray base64</a>
 </div>
-<div class="qr" style="display:block;margin-top:12px">{sub_qr}</div>
-<div style="color:#5d6678;font-size:10.5px;text-align:center">Scan the subscription with your client</div>
+<div class="qr open" style="margin-top:13px"><div class="qr-in">{sub_qr}</div></div>
+<div style="color:var(--ink-faint);font-size:10.5px;text-align:center;margin-top:2px">Scan the subscription with your client</div>
 </div>
-<div class="card"><h3 class="en">Individual configs</h3><h3 class="fa" hidden>کانفیگ‌های جداگانه</h3>{cards}</div>
-<p class="ft">Powered by Voidz</p>
+<div class="card" style="animation-delay:.26s"><h3 class="en">Individual configs</h3><h3 class="fa" hidden>کانفیگ‌های جداگانه</h3>{cards}</div>
+<p class="ft">Powered by <b>Voidz</b></p>
 </div>
+<div class="toast" id="toast"><span class="ic-ok"></span><span id="toast-txt">Copied</span></div>
 <script>
-function cp(id){{navigator.clipboard.writeText(document.getElementById(id).textContent.trim()).then(function(){{
-var t=document.createElement('div');t.textContent='Copied \u2713';t.style.cssText='position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:#171b24;border:1px solid #2a3242;color:#4ecb95;padding:8px 18px;border-radius:999px;font-size:13px;z-index:99';document.body.appendChild(t);setTimeout(function(){{t.remove()}},1800)}})}}
-function tg(id,btn){{var b=document.getElementById(id);var open=b.style.display!=='block';b.style.display=open?'block':'none';btn.textContent=open?'Hide':'QR'}}
+var toastTimer=null;
+function cp(id,btn){{
+  var text=document.getElementById(id).textContent.trim();
+  navigator.clipboard.writeText(text).then(function(){{
+    var t=document.getElementById('toast');
+    document.getElementById('toast-txt').textContent=(document.body.classList.contains('fa')?'کپی شد':'Copied');
+    clearTimeout(toastTimer);
+    t.classList.add('show');
+    toastTimer=setTimeout(function(){{t.classList.remove('show')}},1600);
+    if(btn){{btn.style.transform='scale(.94)';setTimeout(function(){{btn.style.transform=''}},160)}}
+  }});
+}}
+function tg(id,btn){{
+  var b=document.getElementById(id);
+  var open=!b.classList.contains('open');
+  b.classList.toggle('open',open);
+  btn.classList.toggle('active',open);
+}}
 requestAnimationFrame(function(){{requestAnimationFrame(function(){{
   document.querySelectorAll('.ring-fg').forEach(function(el){{el.style.strokeDashoffset=el.dataset.offset}})
 }})}})
