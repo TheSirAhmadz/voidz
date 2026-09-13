@@ -614,7 +614,15 @@ async def instance_http_gateway(token: str, path: str, request: Request):
     url = f"{worker_url}{target['upstream']}/{path}"
     if request.url.query:
         url += f"?{request.url.query}"
-    headers = [(k, v) for k, v in request.headers.items() if k.lower() not in HOP_BY_HOP]
+    headers = [(k, v) for k, v in request.headers.items()
+              if k.lower() not in HOP_BY_HOP and k.lower() not in ("x-forwarded-for", "x-real-ip")]
+    # Set authoritatively rather than passing through whatever the client
+    # sent: Core's per-link device cap keys off this IP. This console
+    # hairpin is this connection's first hop, so request.client is the
+    # trustworthy source (mirrors worker/main.py's _origin_client_ip).
+    origin_ip = (request.client.host if request.client else None) or "unknown"
+    headers.append(("X-Forwarded-For", origin_ip))
+    headers.append(("X-Real-Ip", origin_ip))
     headers.append(("X-Voidz-Endpoint", token))
     from ..config import settings as _cfg
 
@@ -683,13 +691,18 @@ async def instance_ws_gateway(ws: WebSocket, token: str, path: str):
         f"?token={_settings.worker_token}"
     )
 
-    # Forward selected client headers so Core sees the real client IP etc.
-    client_headers = {}
-    for key in ("x-forwarded-for", "x-real-ip", "user-agent"):
-        val = ws.headers.get(key)
-        if val:
-            client_headers[key] = val
-    client_headers["x-voidz-endpoint"] = token
+    # Set the origin client IP authoritatively rather than passing through
+    # whatever the client sent: Core's per-link device cap keys off this
+    # value, so a missing or client-forged one silently disables that cap.
+    # This console hairpin is this connection's first hop, so ws.client is
+    # the trustworthy source (mirrors worker/main.py's _origin_client_ip).
+    origin_ip = (ws.client.host if ws.client else None) or "unknown"
+    client_headers = {
+        "x-forwarded-for": origin_ip,
+        "x-real-ip": origin_ip,
+        "user-agent": ws.headers.get("user-agent", ""),
+        "x-voidz-endpoint": token,
+    }
 
     try:
         async with websockets.connect(

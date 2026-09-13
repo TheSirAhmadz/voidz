@@ -50,6 +50,27 @@ def _is_public_client_path(path: str) -> bool:
     return (path in ("trojan-ws", "ss-ws")
             or path.startswith(("ws/", "xhttp-siz10/", "txhttp-siz10/")))
 
+
+def _origin_client_ip(headers, direct_host: str | None) -> str:
+    """The real, original client IP for this connection — used by Core's
+    per-link device cap, so getting it wrong silently disables that cap.
+
+    If an earlier hop (an edge/proxy in front of this worker) already
+    recorded an X-Forwarded-For, that value IS the original client and is
+    trusted as-is — a client can't forge it here since it's this worker's
+    own edge that sets it, not something the client's own request header
+    would already contain when it reaches that edge. Otherwise fall back to
+    the TCP/ASGI peer this worker itself accepted the connection from.
+    ``direct_host`` must be the transport-layer peer, never another header
+    — that's what keeps this trustworthy when no edge XFF exists."""
+    fwd = headers.get("x-forwarded-for")
+    if fwd:
+        return fwd.split(",")[0].strip()
+    real_ip = headers.get("x-real-ip")
+    if real_ip:
+        return real_ip.strip()
+    return direct_host or "unknown"
+
 setup_logging(os.environ.get("VOIDZ_LOG_LEVEL", "info"))
 log = get("runtime", "voidz.worker")
 
@@ -255,8 +276,16 @@ async def _forward_http(instance_id: str, path: str, request: Request):
         raise HTTPException(status_code=502, detail="instance not running")
     port = status["port"]
     url = httpx.URL(path="/" + path, query=request.url.query.encode())
+    origin_ip = _origin_client_ip(request.headers, request.client.host if request.client else None)
     headers = [(k, v) for (k, v) in request.headers.items()
-               if k.lower() not in ("host", "content-length", "authorization")]
+               if k.lower() not in ("host", "content-length", "authorization",
+                                    "x-forwarded-for", "x-real-ip")]
+    # Set authoritatively rather than passing through whatever the client
+    # sent: Core's per-link device cap keys off this IP, so a missing or
+    # attacker-controlled value here silently disables that cap for every
+    # customer (see _origin_client_ip).
+    headers.append(("X-Forwarded-For", origin_ip))
+    headers.append(("X-Real-Ip", origin_ip))
     # Translate auth: the worker token got us in; the Core expects its own
     # instance token (stored at launch time).
     handle = driver.handles.get(instance_id)
@@ -345,8 +374,13 @@ async def _forward_ws(instance_id: str, path: str, ws: WebSocket) -> None:
         return
 
     upstream_url = f"ws://127.0.0.1:{status['port']}/{path}"
-    headers = {k: v for k, v in ws.headers.items()
-               if k.lower() in ("x-forwarded-for", "x-real-ip", "user-agent")}
+    origin_ip = _origin_client_ip(ws.headers, ws.client.host if ws.client else None)
+    headers = {"user-agent": ws.headers.get("user-agent", "")}
+    # Set authoritatively — see _origin_client_ip: Core's per-link device cap
+    # keys off this IP, so this must never be a passthrough of a possibly
+    # absent or client-forged header.
+    headers["x-forwarded-for"] = origin_ip
+    headers["x-real-ip"] = origin_ip
     # Carry Core's own close code/reason back to the client. Without this every
     # rejection (bad credential, device limit, quota) reaches the client as a
     # plain 1000, which makes a refused connection indistinguishable from a
