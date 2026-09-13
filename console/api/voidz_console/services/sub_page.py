@@ -169,7 +169,7 @@ _SUB_CSS = r"""
 .pass>*{position:relative;z-index:3}
 .pass-head{display:flex;align-items:flex-start;justify-content:space-between;gap:16px}
 .pass-id{min-width:0}
-.pass-name{margin:8px 0 0;font-size:30px;line-height:1.08;font-weight:680;letter-spacing:-.032em;overflow-wrap:anywhere;
+.pass-name{margin:-1px 0 0;font-size:30px;line-height:1.08;font-weight:680;letter-spacing:-.032em;overflow-wrap:anywhere;
   background:linear-gradient(180deg,#fff 35%,#c3cbd7);-webkit-background-clip:text;background-clip:text;color:transparent}
 .pass-sub{display:flex;flex-wrap:wrap;align-items:center;gap:4px 10px;margin-top:9px;color:var(--fg-2);font-size:13px}
 .pass-sub .sep{width:3px;height:3px;border-radius:50%;background:var(--fg-4)}
@@ -848,10 +848,8 @@ def render_subscription_page(*, title: str, configs: list, host: str, sub_path: 
     # pass card
     if info is not None:
         metrics, (status_text, status_tone) = _metrics(info)
-        eyebrow = esc(info.get("plan_name") or "Subscription")
     else:
         metrics, (status_text, status_tone) = "", ("Live", "ok")
-        eyebrow = "Instance"
     sub_bits = []
     if regions:
         sub_bits.append(f'<span><b>{len(regions)}</b> {"location" if len(regions) == 1 else "locations"}</span>')
@@ -937,7 +935,6 @@ def render_subscription_page(*, title: str, configs: list, host: str, sub_path: 
   <section class="pass reveal" style="--i:1" aria-label="Subscription overview">
     <div class="pass-head">
       <div class="pass-id">
-        <div class="eyebrow">{eyebrow}</div>
         <h1 class="pass-name">{esc(name)}</h1>
         <div class="pass-sub">{pass_sub}</div>
       </div>
