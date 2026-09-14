@@ -735,6 +735,7 @@ function viewPlanDetail(planId){
           '<td><div class="row" style="gap:4px;flex-wrap:nowrap">'+
           '<button class="btn sm" data-act="copy">Copy link</button>'+
           '<button class="btn sm" data-act="extend">+30d</button>'+
+          '<button class="btn sm" data-act="edit">Edit</button>'+
           '<button class="btn sm" data-act="devices">Devices</button>'+
           '<button class="btn sm" data-act="reset">Reset</button>'+
           '<button class="btn sm" data-act="repro">Repair</button>'+
@@ -755,6 +756,27 @@ function viewPlanDetail(planId){
         }
         if(act==="extend"){
           api("PATCH","/api/plans/"+planId+"/customers/"+cid,{extend_days:30}).then(function(){toast("Extended 30 days","ok");load()}).catch(function(e){toast(e.message,"err")});
+          return;
+        }
+        if(act==="edit"){
+          var rawDays=prompt("Days to add for "+cust.name+" (negative to shorten, blank = no change):","");
+          if(rawDays===null)return;
+          var curGB=cust.limit_bytes?String(Math.round(cust.limit_bytes/(1024*1024*1024))):"0";
+          var rawGB=prompt("Total data limit in GB for "+cust.name+" (0 = unlimited, blank = no change):",curGB);
+          if(rawGB===null)return;
+          var patch={};
+          if(rawDays.trim()!==""){
+            var d=parseInt(rawDays,10);
+            if(isNaN(d)){toast("Enter a valid number of days","err");return}
+            patch.extend_days=d;
+          }
+          if(rawGB.trim()!==""){
+            var g=parseFloat(rawGB);
+            if(isNaN(g)||g<0){toast("Enter a valid GB value","err");return}
+            patch.limit_gb=g;
+          }
+          if(!Object.keys(patch).length){return}
+          api("PATCH","/api/plans/"+planId+"/customers/"+cid,patch).then(function(){toast("Updated","ok");load()}).catch(function(e){toast(e.message,"err")});
           return;
         }
         if(act==="devices"){
