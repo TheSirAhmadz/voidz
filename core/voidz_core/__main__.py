@@ -45,9 +45,7 @@ def main(argv: list[str] | None = None) -> int:
         log_level=cfg.log_level,
         workers=1,
         loop="auto",
-        # Explicit rather than "auto": ping/pong keepalive (below) is only
-        # honored by the "websockets" implementation, not "wsproto".
-        ws="websockets",
+        ws="auto",
         # A client that vanishes without a clean close (killed app, dead
         # network, phone switching off wifi) leaves its connection looking
         # "established" — and its device slot held — until the server

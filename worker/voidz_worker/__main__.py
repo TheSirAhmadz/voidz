@@ -22,7 +22,7 @@ def main() -> int:
         # its device slot — until uvicorn's default keepalive notices,
         # which can take up to ~40s. Tightened so a dead device's slot
         # frees up within a few seconds instead.
-        ws="websockets",
+        ws="auto",
         ws_ping_interval=5.0,
         ws_ping_timeout=5.0,
     )

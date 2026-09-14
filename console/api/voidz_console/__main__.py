@@ -17,7 +17,7 @@ def main() -> int:
         log_level=os.environ.get("VOIDZ_LOG_LEVEL", "info"),
         # The hairpin gateway (instance_ws_gateway) is a client-facing hop
         # too — see worker/voidz_worker/__main__.py for why this matters.
-        ws="websockets",
+        ws="auto",
         ws_ping_interval=5.0,
         ws_ping_timeout=5.0,
     )
