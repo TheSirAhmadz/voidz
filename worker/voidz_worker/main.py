@@ -75,29 +75,16 @@ def _origin_client_ip(headers, direct_host: str | None) -> str:
     every time — a client cannot make either header carry anything but
     their real address. ``direct_host`` is the TCP/ASGI peer, used only when
     none of the above are present."""
-    secret_seen = headers.get("x-voidz-edge-secret", "")
-    secret_ok = bool(EDGE_SECRET) and secrets.compare_digest(secret_seen, EDGE_SECRET)
-    if secret_ok:
+    if EDGE_SECRET and secrets.compare_digest(headers.get("x-voidz-edge-secret", ""), EDGE_SECRET):
         real_ip = headers.get("x-voidz-real-ip")
         if real_ip:
-            log.info(
-                "DIAG _origin_client_ip: trusting x-voidz-real-ip=%s (secret_ok=True)",
-                real_ip,
-            )
             return real_ip.strip()
     fwd = headers.get("x-forwarded-for")
     if fwd:
-        log.info(
-            "DIAG _origin_client_ip: falling back to x-forwarded-for=%s "
-            "(secret_ok=%s edge_secret_set=%s secret_seen_len=%d x-voidz-real-ip=%r direct_host=%s)",
-            fwd, secret_ok, bool(EDGE_SECRET), len(secret_seen), headers.get("x-voidz-real-ip"), direct_host,
-        )
         return fwd.split(",")[0].strip()
     real_ip = headers.get("x-real-ip")
     if real_ip:
-        log.info("DIAG _origin_client_ip: falling back to x-real-ip=%s", real_ip)
         return real_ip.strip()
-    log.info("DIAG _origin_client_ip: falling back to direct_host=%s", direct_host)
     return direct_host or "unknown"
 
 setup_logging(os.environ.get("VOIDZ_LOG_LEVEL", "info"))

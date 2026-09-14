@@ -35,6 +35,18 @@ DEVICE_CHECK_INTERVAL = 2.0
 # closes, so those gaps don't hand the slot to another device mid-use.
 DEVICE_LINGER_SECONDS = 8.0
 
+# An IP doesn't count toward the cap until it's been alive this long. Some
+# client-side networks (a NAT/proxy pool in front of the real device) hand
+# out a different apparent public IP per new TCP connection — harmless for
+# one connection at a time, but a client that opens many connections at once
+# (e.g. a "ping all configs" bulk test) can then look like a burst of
+# distinct devices for the second or two those connections are actually
+# open. A real second device stays connected far longer than that; a burst
+# probe from the same real device does not, so this window tells them apart
+# without weakening the cap against a real second device — it only delays
+# locking by up to this many seconds.
+DEVICE_CONFIRM_SECONDS = 4.0
+
 # Per customer: IP -> {"first": ts, "last": ts} (epoch seconds) for every IP
 # currently holding, or lingering in, a device slot. In memory only; a
 # restart just rebuilds it from live connections on the next tick.
@@ -306,7 +318,11 @@ async def _live_ips_by_region(pool, plan_id: str, cred_uuid: str,
 def _update_presence(customer_id: str, by_region: dict[str, dict[str, float | None]],
                      now: float) -> list[str]:
     """Fold this tick's live IPs into the customer's presence record and
-    return the IPs currently holding a slot, earliest arrival first."""
+    return the IPs that have held a slot for at least DEVICE_CONFIRM_SECONDS,
+    earliest arrival first. A freshly-seen IP is tracked immediately (so it
+    ages toward that threshold, and so it isn't handed away to a
+    linger-expiring IP), but doesn't count toward the cap until confirmed —
+    see DEVICE_CONFIRM_SECONDS."""
     presence = _device_presence.setdefault(customer_id, {})
     live: dict[str, float] = {}
     for ips in by_region.values():
@@ -322,7 +338,8 @@ def _update_presence(customer_id: str, by_region: dict[str, dict[str, float | No
     for ip in [ip for ip, rec in presence.items()
                if ip not in live and now - rec["last"] > DEVICE_LINGER_SECONDS]:
         del presence[ip]
-    return sorted(presence, key=lambda ip: presence[ip]["first"])
+    confirmed = [ip for ip, rec in presence.items() if now - rec["first"] >= DEVICE_CONFIRM_SECONDS]
+    return sorted(confirmed, key=lambda ip: presence[ip]["first"])
 
 
 async def enforce_device_limits(pool) -> None:
@@ -336,12 +353,17 @@ async def enforce_device_limits(pool) -> None:
     that were already open. Once a holder leaves, the lock lifts and the next
     device to connect takes the slot.
 
-    Two properties matter here. The lock applies at the cap, not only above
+    Three properties matter here. The lock applies at the cap, not only above
     it: waiting for "more devices than allowed" meant that the moment the
     extra device was refused, the count fell back to the cap, the lock
-    lifted, and the extra device got straight back in — forever. And pooling
-    by IP means one device that pings or uses several regions at once is
-    still one device.
+    lifted, and the extra device got straight back in — forever. Pooling by
+    IP means one device that pings or uses several regions at once is still
+    one device. And an IP only counts once it's held its slot for
+    DEVICE_CONFIRM_SECONDS, so a client-side NAT/proxy that hands out a
+    different apparent IP per connection doesn't look like several devices
+    just because it opened several connections at once (e.g. a "ping all
+    configs" bulk test) — a real second device stays confirmed well past
+    that window.
     """
     rows = await pool.fetch(
         "SELECT id, plan_id, cred_uuid, name, max_devices FROM customers "
