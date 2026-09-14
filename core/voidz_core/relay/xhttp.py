@@ -38,6 +38,7 @@ SESSION_IDLE_TIMEOUT = 30
 SESSION_IDLE_TIMEOUT_ACTIVE = 90
 REAPER_INTERVAL = 10
 TCP_CONNECT_TIMEOUT = 10.0
+DISCONNECT_POLL_SECONDS = 2.0
 
 SOCK_BUF_SIZE = 4 * 1024 * 1024
 
@@ -149,7 +150,13 @@ class XHttpEngine:
             if not self.ctx.connections.device_slot_available(uuid, ip, link.max_devices, link.allowed_ips):
                 raise HTTPException(status_code=403, detail="device limit reached")
             conn_id = secrets.token_urlsafe(6)
-            self.ctx.connections.register(conn_id, uuid=uuid, ip=ip, transport=f"xhttp-{mode}")
+
+            def kill() -> None:
+                asyncio.get_running_loop().create_task(
+                    self.teardown(uuid, session_id, reason="device-limit"))
+
+            self.ctx.connections.register(conn_id, uuid=uuid, ip=ip, transport=f"xhttp-{mode}",
+                                          kill=kill)
             sess = {
                 "uuid": uuid, "mode": mode, "writer": None,
                 "downlink_task": None,
@@ -455,11 +462,28 @@ class XHttpEngine:
         headers = _resp_headers("chrome")
 
         async def gen():
-            while True:
-                chunk = await sess["down_q"].get()
-                if chunk is None:
-                    break
-                sess["last_seen"] = time.time()
-                yield chunk
+            # The downlink GET is the only long-lived request a session has,
+            # so its closing is the one real signal that the client is gone.
+            # Without watching for it, a session (and the device slot it
+            # holds) lingered until the idle reaper: up to ~100s. A GET has no
+            # body, so polling receive() here can't swallow request data.
+            try:
+                while True:
+                    try:
+                        chunk = await asyncio.wait_for(sess["down_q"].get(),
+                                                       timeout=DISCONNECT_POLL_SECONDS)
+                    except asyncio.TimeoutError:
+                        if await request.is_disconnected():
+                            await self.teardown(uuid, session_id, reason="client-disconnect")
+                            return
+                        continue
+                    if chunk is None:
+                        break
+                    sess["last_seen"] = time.time()
+                    yield chunk
+            except asyncio.CancelledError:
+                asyncio.get_running_loop().create_task(
+                    self.teardown(uuid, session_id, reason="client-disconnect"))
+                raise
 
         return StreamingResponse(gen(), media_type=headers.pop("content-type", "application/grpc"), headers=headers)

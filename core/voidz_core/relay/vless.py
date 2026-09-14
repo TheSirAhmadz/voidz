@@ -15,6 +15,7 @@ from .base import (
     pump_ws_to_tcp,
     tune_socket,
     ws_client_ip,
+    ws_killer,
 )
 
 log = get("network", "voidz.relay.vless")
@@ -89,7 +90,7 @@ async def vless_ws_tunnel(ctx: RelayContext, ws: WebSocket, uuid: str) -> None:
         await ws.close(code=1008, reason="device limit reached")
         return
     conn_id = secrets.token_urlsafe(6)
-    ctx.connections.register(conn_id, uuid=uuid, ip=ip, transport="vless-ws")
+    ctx.connections.register(conn_id, uuid=uuid, ip=ip, transport="vless-ws", kill=ws_killer(ws))
     log.info("ws open [%s] uuid=%s ip=%s active=%d", conn_id, uuid[:8], ip, ctx.connections.count())
 
     writer = None

@@ -16,7 +16,7 @@ from cryptography.hazmat.primitives.ciphers.aead import AESGCM, ChaCha20Poly1305
 from fastapi import WebSocket, WebSocketDisconnect
 
 from ..logging import get
-from .base import QuotaGate, RelayContext, tune_socket, ws_client_ip
+from .base import QuotaGate, RelayContext, tune_socket, ws_client_ip, ws_killer
 
 log = get("network", "voidz.relay.shadowsocks")
 
@@ -250,7 +250,8 @@ async def shadowsocks_ws_tunnel(ctx: RelayContext, ws: WebSocket) -> None:
             return
 
         first_chunk = bytes(raw)
-        ctx.connections.register(conn_id, uuid=link.uuid, ip=ip, transport="shadowsocks-ws")
+        ctx.connections.register(conn_id, uuid=link.uuid, ip=ip, transport="shadowsocks-ws",
+                                 kill=ws_killer(ws))
         log.info("ss open [%s] uuid=%s ip=%s", conn_id, link.uuid[:8], ip)
 
         first_payload = chunks[0]

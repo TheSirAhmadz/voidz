@@ -18,6 +18,7 @@ from .base import (
     pump_ws_to_tcp,
     tune_socket,
     ws_client_ip,
+    ws_killer,
 )
 
 log = get("network", "voidz.relay.trojan")
@@ -138,17 +139,18 @@ async def trojan_ws_tunnel(ctx: RelayContext, ws: WebSocket) -> None:
         await ws.close(code=1008, reason="device limit reached")
         return
     conn_id = secrets.token_urlsafe(6)
-    ctx.connections.register(conn_id, uuid=link.uuid, ip=ip, transport="trojan-ws")
+    ctx.connections.register(conn_id, uuid=link.uuid, ip=ip, transport="trojan-ws",
+                             kill=ws_killer(ws))
     log.info("trojan ws open [%s] ip=%s active=%d", conn_id, ip, ctx.connections.count())
-
-    gate = QuotaGate(ctx, link.uuid, conn_id)
-    if not await gate.add(len(first_chunk)):
-        await ws.close(code=1008, reason="quota exceeded or link disabled")
-        return
-    ctx.stats.add_request()
 
     writer = None
     try:
+        gate = QuotaGate(ctx, link.uuid, conn_id)
+        if not await gate.add(len(first_chunk)):
+            await ws.close(code=1008, reason="quota exceeded or link disabled")
+            return
+        ctx.stats.add_request()
+
         reader, writer = await asyncio.wait_for(
             asyncio.open_connection(address, port), timeout=ctx.cfg.upstream_connect_timeout
         )

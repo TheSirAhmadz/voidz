@@ -269,6 +269,11 @@ class Core:
             link.max_devices = max(0, int(body["max_devices"] or 0))
         if "allowed_ips" in body:
             link.allowed_ips = list(body["allowed_ips"] or [])
+            if link.allowed_ips:
+                kicked = self.connections.kick(link.uuid, link.allowed_ips)
+                if kicked:
+                    log.info("device lock on %s: disconnected %d connection(s) from other IPs",
+                             link.uuid[:8], kicked)
 
     def _read_process_metrics(self) -> dict:
         proc = psutil.Process()

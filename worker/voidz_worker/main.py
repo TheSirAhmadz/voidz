@@ -270,6 +270,33 @@ async def direct_http_proxy(token: str, path: str, request: Request):
     return await _forward_http(instance_id, path, request)
 
 
+async def _until_client_gone(chunks, request: Request, upstream):
+    """Relay a long-lived downlink, but stop — closing the upstream request
+    to Core — as soon as the client is gone. An idle stream never writes, so
+    nothing else notices the client left, and Core would keep the session
+    (and the device slot it holds) until its idle reaper fires. Only safe for
+    GETs: polling receive() on a request with a body could swallow it."""
+    it = chunks.__aiter__()
+    pending = asyncio.ensure_future(it.__anext__())
+    try:
+        while True:
+            done, _ = await asyncio.wait({pending}, timeout=2.0)
+            if not done:
+                if await request.is_disconnected():
+                    return
+                continue
+            try:
+                chunk = pending.result()
+            except StopAsyncIteration:
+                return
+            yield chunk
+            pending = asyncio.ensure_future(it.__anext__())
+    finally:
+        if not pending.done():
+            pending.cancel()
+        await upstream.aclose()
+
+
 async def _forward_http(instance_id: str, path: str, request: Request):
     try:
         status = await driver.status(instance_id)
@@ -320,8 +347,12 @@ async def _forward_http(instance_id: str, path: str, request: Request):
             await upstream.aclose()
             await client.aclose()
 
+        body = upstream.aiter_raw()
+        if request.method == "GET" and _is_public_client_path(path):
+            body = _until_client_gone(body, request, upstream)
+
         return StreamingResponse(
-            upstream.aiter_raw(),
+            body,
             status_code=upstream.status_code,
             headers={k: v for k, v in upstream.headers.items()
                      if k.lower() not in ("content-length", "transfer-encoding", "connection")},

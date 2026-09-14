@@ -127,6 +127,19 @@ def ws_client_ip(ws: WebSocket) -> str:
     return ws.client.host if ws.client else "unknown"
 
 
+def ws_killer(ws: WebSocket):
+    """A callback that closes `ws` from outside its handler (the relay pumps
+    swallow the resulting errors and exit), for ConnectionTracker.kick."""
+    def kill() -> None:
+        async def _close() -> None:
+            try:
+                await ws.close(code=1008, reason="device limit reached")
+            except Exception:
+                pass
+        asyncio.get_running_loop().create_task(_close())
+    return kill
+
+
 def write_ws_error(ctx: RelayContext, message: str) -> None:
     ctx.stats.add_error(message)
 

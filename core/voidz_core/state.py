@@ -16,6 +16,7 @@ import os
 import secrets
 import time
 from collections import defaultdict, deque
+from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -178,8 +179,10 @@ class ConnectionTracker:
 
     def __init__(self):
         self._conns: dict[str, dict] = {}
+        self._kill: dict[str, Callable[[], None]] = {}
 
-    def register(self, conn_id: str, *, uuid: str, ip: str, transport: str) -> dict:
+    def register(self, conn_id: str, *, uuid: str, ip: str, transport: str,
+                 kill: Callable[[], None] | None = None) -> dict:
         conn = {
             "conn_id": conn_id,
             "uuid": uuid,
@@ -189,7 +192,24 @@ class ConnectionTracker:
             "bytes": 0,
         }
         self._conns[conn_id] = conn
+        if kill is not None:
+            self._kill[conn_id] = kill
         return conn
+
+    def kick(self, uuid: str, keep_ips: list[str]) -> int:
+        """Disconnect every live connection on `uuid` whose IP isn't in
+        `keep_ips`. The allow-list is only checked when a connection opens,
+        so without this a device that got in before a lock was pushed would
+        keep working indefinitely."""
+        kicked = 0
+        for conn_id, conn in list(self._conns.items()):
+            if conn["uuid"] != uuid or conn["ip"] in keep_ips:
+                continue
+            kill = self._kill.pop(conn_id, None)
+            if kill is not None:
+                kill()
+                kicked += 1
+        return kicked
 
     def add_bytes(self, conn_id: str, n: int) -> None:
         conn = self._conns.get(conn_id)
@@ -198,6 +218,7 @@ class ConnectionTracker:
 
     def remove(self, conn_id: str) -> None:
         self._conns.pop(conn_id, None)
+        self._kill.pop(conn_id, None)
 
     def count(self) -> int:
         return len(self._conns)
