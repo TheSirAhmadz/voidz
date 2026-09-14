@@ -50,6 +50,21 @@ def _is_public_client_path(path: str) -> bool:
             or path.startswith(("ws/", "xhttp-siz10/", "txhttp-siz10/")))
 
 
+def _public_host() -> str | None:
+    """The console's own public domain when VOIDZ_PUBLIC_URL is set (e.g. a
+    Cloudflare Worker fronting Railway to hide it from clients). Without
+    this, the sub page's displayed/import host falls back to whatever Host
+    header the request happened to arrive with — which, once a proxying
+    edge sits in front of this service and doesn't forward the original
+    Host, silently reverts to the hidden origin domain."""
+    import os
+
+    url = os.environ.get("VOIDZ_PUBLIC_URL", "").strip()
+    if not url:
+        return None
+    return url.split("://", 1)[-1].split(":")[0].split("/")[0] or None
+
+
 def _page(title: str, body: str, status: int = 200, icon: str | None = None,
           tone: str | None = None) -> "HTMLResponse":
     from fastapi.responses import HTMLResponse
@@ -293,6 +308,7 @@ async def instance_subscription(token: str, request: Request):
                      "The subscription will work once the instance is running.", status=503)
     host = (request.query_params.get("host")
             or inst["public_host"]
+            or _public_host()
             or (request.headers.get("x-forwarded-host") or "").split(",")[0].strip()
             or request.headers.get("host") or "").split(":")[0]
     if not host:
@@ -453,6 +469,7 @@ async def plan_subscription(sub_token: str, request: Request):
         cust["plan_id"],
     )
     host = (request.query_params.get("host")
+            or _public_host()
             or (request.headers.get("x-forwarded-host") or "").split(",")[0].strip()
             or request.headers.get("host") or "").split(":")[0]
     if not host:
