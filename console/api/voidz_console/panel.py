@@ -574,8 +574,13 @@ function viewAdmin(){
 }
 // ───────────────────────────── plans & customers ─────────────────────────────
 function fmtGB(bytes){return (bytes/(1024*1024*1024)).toFixed(bytes && bytes<1073741824?3:1)}
-function fmtExpiry(iso){if(!iso)return"never";var d=new Date(iso);var days=Math.ceil((d-new Date())/864e5);
-  if(days<0)return"expired";if(days===0)return"today";return days+"d left"}
+function fmtExpiry(iso){if(!iso)return"never";var ms=new Date(iso)-new Date();
+  if(ms<=0)return"expired";
+  var mins=Math.ceil(ms/60000);
+  if(mins<60)return mins+"m left";
+  var hours=Math.ceil(ms/3600000);
+  if(hours<24)return hours+"h left";
+  return Math.ceil(ms/864e5)+"d left"}
 
 function viewPlans(){
   shell("plans");

@@ -779,13 +779,27 @@ _BACKDROP = ('<div class="backdrop" aria-hidden="true"><div class="bg-photo"></d
 # ---------------------------------------------------------------------------
 # Subscription page
 # ---------------------------------------------------------------------------
+def _time_unit(hours: float) -> tuple[int, str]:
+    """Round a duration in hours up to the coarsest unit that doesn't lose
+    it entirely — minutes under an hour, hours under a day, days above
+    that — so a short trial (e.g. 3 hours) doesn't get rounded up into
+    "1 day left"."""
+    import math
+
+    if hours < 1:
+        return max(1, math.ceil(hours * 60)), "minute"
+    if hours < 24:
+        return math.ceil(hours), "hour"
+    return math.ceil(hours / 24), "day"
+
+
 def _metrics(info: dict) -> tuple[str, tuple[str, str]]:
     used = float(info.get("used_gb") or 0)
     total = info.get("total_gb")
     pct = max(0.0, min(100.0, float(info.get("pct") or 0)))
     no_expiry = info.get("no_expiry", True)
-    days_left = int(info.get("days_left") or 0)
-    days_total = max(1, int(info.get("days_total") or 1))
+    hours_left = float(info.get("hours_left") or 0)
+    hours_total = max(0.01, float(info.get("hours_total") or 1))
     online = int(info.get("online_count") or 0)
     max_dev = int(info.get("max_devices") or 0)
     expires_at = info.get("expires_at")
@@ -827,18 +841,25 @@ def _metrics(info: dict) -> tuple[str, tuple[str, str]]:
             '<div class="metric-foot"><b>No expiry</b></div></div>'
         )
     else:
-        time_tone = "crit" if days_left <= 1 else ("warn" if days_left <= 3 else "")
-        elapsed = min(1.0, max(0.0, 1 - days_left / days_total))
+        time_left_n, time_left_unit = _time_unit(hours_left)
+        time_tone = "crit" if hours_left <= 24 else ("warn" if hours_left <= 72 else "")
+        elapsed = min(1.0, max(0.0, 1 - hours_left / hours_total))
         elapsed = max(elapsed, 0.012) if elapsed > 0 else 0
         date_s = f"{expires_at:%b} {expires_at.day}, {expires_at:%Y}" if hasattr(expires_at, "strftime") else ""
-        foot = f"Expires <b>{esc(date_s)}</b>" if date_s else f"of <b>{days_total}</b> days"
+        if date_s and hours_total >= 24:
+            foot = f"Expires <b>{esc(date_s)}</b>"
+        elif date_s:
+            foot = f"Expires <b>{expires_at:%H:%M}</b> on {esc(date_s)}"
+        else:
+            total_n, total_unit = _time_unit(hours_total)
+            foot = f"of <b>{total_n}</b> {total_unit}{'s' if total_n != 1 else ''}"
         time = (
             f'<div class="metric" data-tone="{time_tone}">'
             f'<div class="metric-label">{icon("clock")}<span>Time</span></div>'
-            f'<div class="metric-value"><span class="num" data-count="{days_left}" data-dec="0">{days_left}</span>'
-            f'<span class="unit">{"day" if days_left == 1 else "days"}</span><span class="of">left</span></div>'
+            f'<div class="metric-value"><span class="num" data-count="{time_left_n}" data-dec="0">{time_left_n}</span>'
+            f'<span class="unit">{time_left_unit}{"s" if time_left_n != 1 else ""}</span><span class="of">left</span></div>'
             f'<div class="meter" style="--p:{elapsed:.4f}" role="progressbar" aria-label="Time elapsed" '
-            f'aria-valuemin="0" aria-valuemax="{days_total}" aria-valuenow="{days_total - days_left}"><i></i></div>'
+            f'aria-valuemin="0" aria-valuemax="100" aria-valuenow="{elapsed * 100:.0f}"><i></i></div>'
             f'<div class="metric-foot">{foot}</div></div>'
         )
 
@@ -863,8 +884,8 @@ def _metrics(info: dict) -> tuple[str, tuple[str, str]]:
 
     if total and pct >= 95:
         status = ("Almost out of data", "crit")
-    elif not no_expiry and days_left <= 3:
-        status = ("Expires soon", "warn" if days_left > 1 else "crit")
+    elif not no_expiry and hours_left <= 72:
+        status = ("Expires soon", "warn" if hours_left > 24 else "crit")
     elif total and pct >= 80:
         status = ("Running low", "warn")
     else:

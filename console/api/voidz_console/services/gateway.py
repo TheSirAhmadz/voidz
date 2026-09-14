@@ -549,19 +549,18 @@ async def plan_subscription(sub_token: str, request: Request):
 
         limit_bytes = int(cust["limit_bytes"] or 0)
         used_bytes = int(cust["used_bytes_cached"] or 0)
-        import math
 
         no_expiry = cust["expires_at"] is None
-        days_left = days_total = None
+        hours_left = hours_total = None
         if not no_expiry:
-            days_left = max(0, math.ceil((cust["expires_at"] - now).total_seconds() / 86400))
-            days_total = max(1, math.ceil((cust["expires_at"] - cust["created_at"]).total_seconds() / 86400))
+            hours_left = max(0.0, (cust["expires_at"] - now).total_seconds() / 3600)
+            hours_total = max(0.01, (cust["expires_at"] - cust["created_at"]).total_seconds() / 3600)
         info = {
             "used_gb": used_bytes / (1024 ** 3),
             "total_gb": (limit_bytes / (1024 ** 3)) if limit_bytes else None,
             "pct": (used_bytes / limit_bytes * 100) if limit_bytes else 0,
-            "days_left": days_left,
-            "days_total": days_total,
+            "hours_left": hours_left,
+            "hours_total": hours_total,
             "no_expiry": no_expiry,
             "online_count": len(device_ips),
             "max_devices": int(cust["max_devices"] or 0),
