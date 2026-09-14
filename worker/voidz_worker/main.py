@@ -51,24 +51,33 @@ def _is_public_client_path(path: str) -> bool:
             or path.startswith(("ws/", "xhttp-siz10/", "txhttp-siz10/")))
 
 
-def _origin_client_ip(headers, direct_host: str | None) -> str:
+def _origin_client_ip(headers, direct_host: str | None, trust_forwarded: bool) -> str:
     """The real, original client IP for this connection — used by Core's
     per-link device cap, so getting it wrong silently disables that cap.
 
-    If an earlier hop (an edge/proxy in front of this worker) already
-    recorded an X-Forwarded-For, that value IS the original client and is
-    trusted as-is — a client can't forge it here since it's this worker's
-    own edge that sets it, not something the client's own request header
-    would already contain when it reaches that edge. Otherwise fall back to
-    the TCP/ASGI peer this worker itself accepted the connection from.
-    ``direct_host`` must be the transport-layer peer, never another header
-    — that's what keeps this trustworthy when no edge XFF exists."""
-    fwd = headers.get("x-forwarded-for")
-    if fwd:
-        return fwd.split(",")[0].strip()
-    real_ip = headers.get("x-real-ip")
-    if real_ip:
-        return real_ip.strip()
+    ``trust_forwarded`` must be True only when this request arrived over
+    the worker-token-authenticated internal route, where the only party
+    that can reach it is the Console itself, which sets X-Forwarded-For
+    authoritatively from the client IP *it* observed before relaying here
+    — that value is trustworthy because it can't have come from the client
+    directly. On the public direct route (/pub/{token}/...), the client
+    talks straight to this worker with no such trusted hop in front of it,
+    so any X-Forwarded-For it sends is just something it typed itself:
+    trusting it there let a Shadowsocks client (whose WS transport plugin
+    sends its own X-Forwarded-For, unlike the native ws clients the other
+    protocols use) present an arbitrary IP and silently bypass the device
+    cap entirely, since every connection looked like the same "device" no
+    matter which real client it came from. With trust_forwarded False, the
+    header is ignored outright and the TCP/ASGI peer is always used —
+    ``direct_host`` must be that transport-layer peer, never another
+    header, for this to mean anything."""
+    if trust_forwarded:
+        fwd = headers.get("x-forwarded-for")
+        if fwd:
+            return fwd.split(",")[0].strip()
+        real_ip = headers.get("x-real-ip")
+        if real_ip:
+            return real_ip.strip()
     return direct_host or "unknown"
 
 setup_logging(os.environ.get("VOIDZ_LOG_LEVEL", "info"))
@@ -249,7 +258,7 @@ async def instance_logs(instance_id: str, tail: int = 200, _=Depends(require_wor
 async def instance_proxy(instance_id: str, path: str, request: Request, _=Depends(require_worker_token)):
     """Internal reverse proxy into an instance's Core (used by the Console for
     its management API calls and by the edge proxy for public traffic)."""
-    return await _forward_http(instance_id, path, request)
+    return await _forward_http(instance_id, path, request, trust_forwarded=True)
 
 
 @app.api_route("/pub/{token}/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS", "HEAD"])
@@ -264,10 +273,10 @@ async def direct_http_proxy(token: str, path: str, request: Request):
     instance_id = decode_direct_token(token, WORKER_TOKEN)
     if instance_id is None:
         raise HTTPException(status_code=404, detail="not found")
-    return await _forward_http(instance_id, path, request)
+    return await _forward_http(instance_id, path, request, trust_forwarded=False)
 
 
-async def _forward_http(instance_id: str, path: str, request: Request):
+async def _forward_http(instance_id: str, path: str, request: Request, trust_forwarded: bool):
     try:
         status = await driver.status(instance_id)
     except DriverError as exc:
@@ -276,7 +285,8 @@ async def _forward_http(instance_id: str, path: str, request: Request):
         raise HTTPException(status_code=502, detail="instance not running")
     port = status["port"]
     url = httpx.URL(path="/" + path, query=request.url.query.encode())
-    origin_ip = _origin_client_ip(request.headers, request.client.host if request.client else None)
+    origin_ip = _origin_client_ip(request.headers, request.client.host if request.client else None,
+                                   trust_forwarded)
     headers = [(k, v) for (k, v) in request.headers.items()
                if k.lower() not in ("host", "content-length", "authorization",
                                     "x-forwarded-for", "x-real-ip")]
@@ -341,7 +351,7 @@ async def instance_ws_proxy(ws: WebSocket, instance_id: str, path: str):
     if not token or not secrets.compare_digest(token, WORKER_TOKEN):
         await ws.close(code=1008, reason="unauthorized")
         return
-    await _forward_ws(instance_id, path, ws)
+    await _forward_ws(instance_id, path, ws, trust_forwarded=True)
 
 
 @app.websocket("/pub/{token}/{path:path}")
@@ -358,10 +368,10 @@ async def direct_ws_proxy(ws: WebSocket, token: str, path: str):
     if instance_id is None:
         await ws.close(code=1008, reason="not found")
         return
-    await _forward_ws(instance_id, path, ws)
+    await _forward_ws(instance_id, path, ws, trust_forwarded=False)
 
 
-async def _forward_ws(instance_id: str, path: str, ws: WebSocket) -> None:
+async def _forward_ws(instance_id: str, path: str, ws: WebSocket, trust_forwarded: bool) -> None:
     import websockets as ws_lib
 
     try:
@@ -374,7 +384,7 @@ async def _forward_ws(instance_id: str, path: str, ws: WebSocket) -> None:
         return
 
     upstream_url = f"ws://127.0.0.1:{status['port']}/{path}"
-    origin_ip = _origin_client_ip(ws.headers, ws.client.host if ws.client else None)
+    origin_ip = _origin_client_ip(ws.headers, ws.client.host if ws.client else None, trust_forwarded)
     headers = {"user-agent": ws.headers.get("user-agent", "")}
     # Set authoritatively — see _origin_client_ip: Core's per-link device cap
     # keys off this IP, so this must never be a passthrough of a possibly

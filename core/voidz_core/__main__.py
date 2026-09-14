@@ -45,7 +45,19 @@ def main(argv: list[str] | None = None) -> int:
         log_level=cfg.log_level,
         workers=1,
         loop="auto",
-        ws="auto",
+        # Explicit rather than "auto": ping/pong keepalive (below) is only
+        # honored by the "websockets" implementation, not "wsproto".
+        ws="websockets",
+        # A client that vanishes without a clean close (killed app, dead
+        # network, phone switching off wifi) leaves its connection looking
+        # "established" — and its device slot held — until the server
+        # notices the peer is gone. Uvicorn's own defaults (20s between
+        # pings, 20s to wait for a pong) make that up to ~40s; tightened
+        # here so a dead device's slot frees up within a few seconds
+        # instead of the customer having to wait around a minute for
+        # another device to be let in.
+        ws_ping_interval=5.0,
+        ws_ping_timeout=5.0,
     )
     return 0
 
