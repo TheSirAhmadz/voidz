@@ -384,6 +384,9 @@ async def _forward_ws(instance_id: str, path: str, ws: WebSocket, trust_forwarde
         return
 
     upstream_url = f"ws://127.0.0.1:{status['port']}/{path}"
+    log.info("DIAG raw xff=%r x-real-ip=%r ws.client=%r trust_forwarded=%r",
+              ws.headers.get("x-forwarded-for"), ws.headers.get("x-real-ip"),
+              ws.client.host if ws.client else None, trust_forwarded)
     origin_ip = _origin_client_ip(ws.headers, ws.client.host if ws.client else None, trust_forwarded)
     headers = {"user-agent": ws.headers.get("user-agent", "")}
     # Set authoritatively — see _origin_client_ip: Core's per-link device cap
