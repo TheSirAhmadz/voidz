@@ -104,7 +104,7 @@ def _link_uuid(cred_uuid: str, protocol: str) -> str:
     return str(uuid_mod.uuid5(uuid_mod.NAMESPACE_URL, f"voidz-link:{cred_uuid}:{protocol}"))
 
 
-async def create_customer(pool, plan, name: str, limit_gb: float, days: int | None,
+async def create_customer(pool, plan, name: str, limit_gb: float, hours: float | None,
                           note: str = "", max_devices: int = 0) -> dict:
     """Provision a new customer across every instance in the plan and
     record it. Returns {id, sub_token, cred_uuid}."""
@@ -116,7 +116,7 @@ async def create_customer(pool, plan, name: str, limit_gb: float, days: int | No
         ss_password = secrets.token_urlsafe(16)
     limit_bytes = int(float(limit_gb) * (1024 ** 3)) if limit_gb else 0
     now = _utcnow()
-    expires_at = (now + timedelta(days=int(days))) if days else None
+    expires_at = (now + timedelta(hours=float(hours))) if hours else None
     max_devices = max(0, int(max_devices or 0))
     cid = secrets.token_hex(16)
     sub_token = secrets.token_urlsafe(24)

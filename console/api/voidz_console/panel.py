@@ -667,7 +667,7 @@ function viewPlanDetail(planId){
       '<h3>New customer</h3>'+
       '<div class="row"><div class="fld" style="width:200px;margin:0"><label>Name</label><input class="inp" id="nc-name" placeholder="e.g. Sister"></div>'+
       '<div class="fld" style="width:140px;margin:0"><label>Quota (GB, 0 = unlimited)</label><input class="inp" id="nc-gb" type="number" min="0" step="0.5" value="50"></div>'+
-      '<div class="fld" style="width:140px;margin:0"><label>Duration (days, blank = never)</label><input class="inp" id="nc-days" type="number" min="1" value="30"></div>'+
+      '<div class="fld" style="width:170px;margin:0"><label>Duration (blank = never)</label><div class="row" style="gap:4px"><input class="inp" id="nc-days" type="number" min="0" step="any" value="30" style="width:90px"><select class="inp" id="nc-dur-unit" style="width:74px"><option value="24">days</option><option value="1">hours</option></select></div></div>'+
       '<div class="fld" style="width:140px;margin:0"><label>Max devices (0 = unlimited)</label><input class="inp" id="nc-devices" type="number" min="0" max="50" value="1"></div></div>'+
       '<div class="fld"><label>Note (optional)</label><input class="inp" id="nc-note" placeholder="e.g. paid via bank transfer 12/09"></div>'+
       '<button class="btn pri" id="nc-go">Create customer</button>'+
@@ -683,11 +683,12 @@ function viewPlanDetail(planId){
       var name=$("#nc-name").value.trim();
       if(!name){toast("Give the customer a name","err");return}
       var gb=parseFloat($("#nc-gb").value||"0");
-      var daysRaw=$("#nc-days").value.trim();
-      var days=daysRaw?parseInt(daysRaw,10):null;
+      var durRaw=$("#nc-days").value.trim();
+      var unitHours=parseFloat($("#nc-dur-unit").value||"24");
+      var hours=durRaw?parseFloat(durRaw)*unitHours:null;
       var devices=parseInt($("#nc-devices").value||"0",10);
       $("#nc-go").disabled=true;
-      api("POST","/api/plans/"+planId+"/customers",{name:name,limit_gb:gb,days:days,note:$("#nc-note").value.trim(),max_devices:devices})
+      api("POST","/api/plans/"+planId+"/customers",{name:name,limit_gb:gb,hours:hours,note:$("#nc-note").value.trim(),max_devices:devices})
         .then(function(cust){
           toast("Customer created","ok");
           $("#pd-newcust").hidden=true;
@@ -755,20 +756,22 @@ function viewPlanDetail(planId){
           return;
         }
         if(act==="extend"){
-          api("PATCH","/api/plans/"+planId+"/customers/"+cid,{extend_days:30}).then(function(){toast("Extended 30 days","ok");load()}).catch(function(e){toast(e.message,"err")});
+          api("PATCH","/api/plans/"+planId+"/customers/"+cid,{extend_hours:720}).then(function(){toast("Extended 30 days","ok");load()}).catch(function(e){toast(e.message,"err")});
           return;
         }
         if(act==="edit"){
-          var rawDays=prompt("Days to add for "+cust.name+" (negative to shorten, blank = no change):","");
-          if(rawDays===null)return;
+          var rawDur=prompt("Time to add for "+cust.name+" — hours, or e.g. \"3d\" for days (negative to shorten, blank = no change):","");
+          if(rawDur===null)return;
           var curGB=cust.limit_bytes?String(Math.round(cust.limit_bytes/(1024*1024*1024))):"0";
           var rawGB=prompt("Total data limit in GB for "+cust.name+" (0 = unlimited, blank = no change):",curGB);
           if(rawGB===null)return;
           var patch={};
-          if(rawDays.trim()!==""){
-            var d=parseInt(rawDays,10);
-            if(isNaN(d)){toast("Enter a valid number of days","err");return}
-            patch.extend_days=d;
+          var durTrim=rawDur.trim();
+          if(durTrim!==""){
+            var m=durTrim.match(/^(-?\d*\.?\d+)\s*d$/i);
+            var h=m?parseFloat(m[1])*24:parseFloat(durTrim);
+            if(isNaN(h)){toast("Enter a number of hours, or e.g. 3d for days","err");return}
+            patch.extend_hours=h;
           }
           if(rawGB.trim()!==""){
             var g=parseFloat(rawGB);
