@@ -55,17 +55,30 @@ def _origin_client_ip(headers, direct_host: str | None) -> str:
     """The real, original client IP for this connection — used by Core's
     per-link device cap, so getting it wrong silently disables that cap.
 
-    Both routes into this function are safe to trust X-Forwarded-For on.
-    The internal route is only reachable with the worker token, and only
-    the Console holds that, setting the header itself from the client IP
-    it observed. The public direct route (/pub/{token}/...) has no such
-    hop in front of it in code, but Railway's own edge terminates every
-    connection before it reaches this worker and was confirmed (by
-    sending a deliberately spoofed X-Forwarded-For/X-Real-Ip end to end
-    and inspecting what actually arrived here) to overwrite both headers
-    with its own observed values every time — a client cannot make either
-    header carry anything but their real address. ``direct_host`` is the
-    TCP/ASGI peer, used only when neither header is present."""
+    When VOIDZ_EDGE_SECRET is set (a Cloudflare Worker sits in front of this
+    worker, hiding the Railway domain from clients), X-Voidz-Real-IP is
+    trusted first, but only alongside the matching X-Voidz-Edge-Secret: that
+    header isn't one Railway's own edge touches, so without the secret check
+    anyone hitting this worker's raw Railway domain directly (bypassing the
+    Cloudflare Worker entirely) could set X-Voidz-Real-IP to whatever they
+    want. The secret is known only to our own Cloudflare Worker scripts and
+    this process's environment.
+
+    Both remaining headers are safe to trust as-is. The internal route is
+    only reachable with the worker token, and only the Console holds that,
+    setting X-Forwarded-For itself from the client IP it observed. The
+    public direct route (/pub/{token}/...) has no such hop in front of it in
+    code, but Railway's own edge terminates every connection before it
+    reaches this worker and was confirmed (by sending a deliberately spoofed
+    X-Forwarded-For/X-Real-Ip end to end and inspecting what actually
+    arrived here) to overwrite both headers with its own observed values
+    every time — a client cannot make either header carry anything but
+    their real address. ``direct_host`` is the TCP/ASGI peer, used only when
+    none of the above are present."""
+    if EDGE_SECRET and secrets.compare_digest(headers.get("x-voidz-edge-secret", ""), EDGE_SECRET):
+        real_ip = headers.get("x-voidz-real-ip")
+        if real_ip:
+            return real_ip.strip()
     fwd = headers.get("x-forwarded-for")
     if fwd:
         return fwd.split(",")[0].strip()
@@ -79,6 +92,7 @@ log = get("runtime", "voidz.worker")
 
 WORKER_TOKEN = os.environ.get("VOIDZ_WORKER_TOKEN", "")
 CONSOLE_URL = os.environ.get("VOIDZ_CONSOLE_URL", "")
+EDGE_SECRET = os.environ.get("VOIDZ_EDGE_SECRET", "")
 CONSOLE_HEARTBEAT_TOKEN = os.environ.get("VOIDZ_WORKER_HEARTBEAT_TOKEN", "")
 DATA_ROOT = Path(os.environ.get("VOIDZ_WORKER_DATA", "/var/lib/voidz/instances"))
 NODE_ID = os.environ.get("VOIDZ_NODE_ID", "local")
