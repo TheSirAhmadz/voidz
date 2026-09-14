@@ -27,12 +27,15 @@ from . import workers as worker_svc
 log = get("runtime", "voidz.console.quota")
 
 RECONCILE_INTERVAL = 20.0
-DEVICE_CHECK_INTERVAL = 5.0
+DEVICE_CHECK_INTERVAL = 2.0
 
 # How long a connection must persist (or how much it must carry) before it
 # counts as a device against the cap. Latency probes from a proxy client hit
 # every region at once and die in well under a second; real usage does not.
-DEVICE_MIN_AGE_SECONDS = 20.0
+# Kept short on purpose: the operator wants a second device shut out promptly
+# rather than getting a generous grace window, and the byte-based path below
+# still lets a real connection qualify even faster once it's carried data.
+DEVICE_MIN_AGE_SECONDS = 5.0
 DEVICE_MIN_BYTES = 64 * 1024
 
 # Last allowed_ips tuple actually confirmed pushed to Core, keyed by

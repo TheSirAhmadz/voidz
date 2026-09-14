@@ -391,7 +391,7 @@ async def _forward_ws(instance_id: str, path: str, ws: WebSocket) -> None:
     close_code, close_reason = 1000, ""
     try:
         async with ws_lib.connect(upstream_url, additional_headers=headers, max_size=None,
-                                  ping_interval=20, ping_timeout=20) as upstream:
+                                  ping_interval=5, ping_timeout=5) as upstream:
             async def c2u():
                 try:
                     while True:
