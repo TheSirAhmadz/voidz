@@ -35,10 +35,17 @@ DEVICE_CHECK_INTERVAL = 5.0
 DEVICE_MIN_AGE_SECONDS = 20.0
 DEVICE_MIN_BYTES = 64 * 1024
 
-# Last allowed_ips tuple pushed to Core, keyed by (customer_id, instance_id),
-# so a tick only PATCHes a region when its lock actually changed. A single
-# console process, so plain in-memory state is fine — a restart just means
-# the locks get recomputed (and re-pushed) fresh on the next tick.
+# Last allowed_ips tuple actually confirmed pushed to Core, keyed by
+# (customer_id, instance_id), so a tick only PATCHes a region when its lock
+# actually changed. A single console process, so plain in-memory state is
+# fine, but a restart empties this dict — and an *empty* desired lock is not
+# a safe default for "nothing to do": Core's link may still be carrying a
+# lock from before the restart (or from before a fix to this logic), and if
+# the freshly computed lock also happens to be empty, comparing against a
+# default of `()` would wrongly conclude they already match and never issue
+# the PATCH that clears it. `_UNSET` forces at least one reconciling push
+# per (customer, instance) after every restart, no matter what it computes to.
+_UNSET = object()
 _device_allowed_ips: dict[tuple[str, str], tuple[str, ...]] = {}
 
 
@@ -345,7 +352,7 @@ async def enforce_device_limits(pool) -> None:
             instance_id = pi["instance_id"]
             key = (c["id"], instance_id)
             seen_keys.add(key)
-            if _device_allowed_ips.get(key, ()) != desired:
+            if _device_allowed_ips.get(key, _UNSET) != desired:
                 await _push_allowed_ips(pool, instance_id, c["cred_uuid"], protocols, list(desired))
                 _device_allowed_ips[key] = desired
                 log.info("customer %s (%s) region %s -> allowed_ips=%s (%d devices seen, cap %d)",
